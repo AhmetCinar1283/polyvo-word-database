@@ -1,0 +1,34 @@
+# Polyvo — calisma zamani konfigurasyonu (TEK kaynak).
+#
+# Burada OLMAYANLAR, ve nedeni:
+#   * gizli anahtarlar        -> .env            (repoya girmez)
+#   * model kalite siralamasi -> model_quality.json (kendi basina bir karar
+#                                dosyasi; elle duzenlenir, aninda etkir)
+#   * bir build'in kanonik kilidi -> data/workspace/<tag>/<l2>/source_config.json
+#                                (konfig degil, OLCUM sonucu)
+
+[project]
+# Aktif veri basligi. Bos birakilirsa cozumleme zinciri devreye girer:
+#   --tag > POLYVO_DATA_TITLE > buradaki deger > data/workspace/ altinda TEK
+#   aday > hata (tahmin YOK).
+active_tag = ""
+
+# Ogrenilen dil. `en` bir tercih degil, bir VERI SINIRI: yalnizca en.db'de
+# tanim/POS/CEFR/ornek var; diger dil dosyalari synset->kelime listeleridir.
+l2 = "en"
+
+# Ana diller. Yeni bir dil eklemek satir ve dosya ekler, SEMA DEGISTIRMEZ.
+l1 = ["tr"]
+
+[paths]
+# Tum veri buranin altinda. Mutlak yol da verilebilir (baska bir diske almak
+# icin) — kod hicbir dizin adini kendi yazmaz, hepsi core/paths.py'den gecer.
+data_root = "data"
+
+[universe]
+# Ogrenilebilir kelime evreninin hedef buyuklugu. Eski repoda bu sayi sekiz
+# ayri dosyada hardcode edilmisti.
+target_size = 5000
+
+[llm]
+default_provider = "ollama"

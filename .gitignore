@@ -1,0 +1,24 @@
+# Veri — hicbiri repoya girmez.
+# `data/stores/` ve `data/human/` YENIDEN URETILEMEZ (kimlik + insan kararlari):
+# repoya girmedikleri icin yedegi AYRICA alinmali, git degil.
+data/
+
+venv/
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+
+.env
+.pytest_cache/
+.coverage
+htmlcov/
+
+.vscode/
+.idea/
+Thumbs.db
+
+# Eski repodan kalan sevkiyat. Yeni yeri: data/dist/<tag>/<l2>/
+content/

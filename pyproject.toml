@@ -1,0 +1,29 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "polyvo-word-databases"
+version = "0.1.0"
+description = "Polyvo kelime veritabani hatti — sozluk insasi, mufredat ve icerik uretimi"
+requires-python = ">=3.11"
+dependencies = [
+    "requests>=2.31",
+    "numpy>=1.26",
+    "nltk>=3.8",
+]
+
+[project.optional-dependencies]
+# Yalnizca embedding kumeleme icin. Temel hat bunlarsiz calisir.
+embedding = ["scikit-learn>=1.4"]
+dev = ["pytest>=8.0"]
+
+[project.scripts]
+polyvo = "polyvo.core.cli.main:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
