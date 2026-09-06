@@ -1,38 +1,15 @@
 """
-Butun dosya yollarinin TEK kaynagi + aktif veri basligi (tag) cozumlemesi.
+Butun dosya yollarinin TEK kaynagi + aktif tag cozumlemesi. Hicbir modul
+kendi basina dizin adi yazmaz.
 
-Hicbir modul kendi basina bir dizin adi yazmaz. Sebep sadece duzen degil:
-eski repoda tasinan bir dosyanin yolu iki yerde guncellenmedigi icin uc kez
-sessiz veri kaybi yasandi (gorsel katalogu, embedding deposu, LLM onbellegi) —
-uc seferinde de kod "basarili" raporlayip bos ciktiyla devam etti.
+GLOBAL (tag'siz, semantik kimlikle anahtarli): `raw/` kaynaklar, `cache/`
+pahali-ama-yeniden-uretilebilir, `stores/` KUTSAL kimlik+odenmis kararlar,
+`human/` tier=0 yedek.
+TAG'E GORE COGUL (bir build'in izdusumu): `builds/<tag>/`, `workspace/<tag>/
+<l2>/`, `dist/<tag>/<l2>/`.
 
-## Iki sinif dizin, ve aralarindaki fark neden kritik
-
-  GLOBAL (tag'siz)  — anahtari SEMANTIK KIMLIK: synset, kelime, prompt hash.
-      data/raw/     indirilen kaynaklar
-      data/cache/   pahali AMA yeniden uretilebilir (LLM + embedding)
-      data/stores/  KIMLIK + odenmis kararlar + insan duzeltmeleri. KUTSAL.
-      data/human/   tier=0 tasinabilir yedek
-    Bunlar tag'e gore bolunemez: bolunurse her yeni veri basligi icin her
-    embedding/LLM/anlam/gloss/ceviri karari YENIDEN odenir.
-
-  TAG'E GORE COGUL — bir build'in IZDUSUMU:
-      data/builds/<tag>/<NN_stage>/
-      data/workspace/<tag>/<l2>/
-      data/dist/<tag>/<l2>/
-    Bunlar tek yuvali olamaz: olurlarsa ikinci bir veri basligi birincisinin
-    ciktisini sessizce ezer (eski repoda tam olarak bu oldu).
-
-## Tag cozumleme (KURAL: tahmin yok)
-
-    1. acik argüman            --tag / --data-title
-    2. ortam degiskeni         POLYVO_DATA_TITLE
-    3. polyvo.toml             project.active_tag
-    4. data/workspace/ altinda TAM OLARAK BIR aday varsa -> o
-    5. aksi halde              SystemExit, adaylari listeleyerek
-
-4. adimda birden fazla aday varsa da durulur. "En yenisini sec" gibi bir
-sezgi EKLENMEZ: yanlis tag'e yazmak, hic yazmamaktan pahalidir.
+Tag cozumleme sirasi (tahmin YOK): --tag > POLYVO_DATA_TITLE > polyvo.toml >
+`workspace/` altinda tek aday > SystemExit.
 """
 
 from __future__ import annotations
@@ -51,14 +28,17 @@ LANGUAGE_NAMES: dict[str, str] = {
 
 
 def language_name(code: str) -> str:
+    """Dil kodundan okunakli isim uretir; bilinmiyorsa kodu oldugu gibi doner."""
     return LANGUAGE_NAMES.get(code, code)
 
 
 def _root(*parts: str) -> str:
+    """Depo koku altinda bir yol birlestirir."""
     return os.path.join(config.project_root(), *parts)
 
 
 def data_root() -> str:
+    """`data/` dizininin tam yolu (konfigde tasinabilir)."""
     configured = str(config.get("paths", "data_root", "data"))
     if os.path.isabs(configured):
         return configured
@@ -66,6 +46,7 @@ def data_root() -> str:
 
 
 def _data(*parts: str) -> str:
+    """`data_root()` altinda bir yol birlestirir."""
     return os.path.join(data_root(), *parts)
 
 
@@ -92,10 +73,12 @@ def human_dir() -> str:
 
 
 def llm_cache_path() -> str:
+    """`data/cache/llm_cache.sqlite` tam yolu."""
     return os.path.join(cache_dir(), "llm_cache.sqlite")
 
 
 def embedding_cache_path() -> str:
+    """`data/cache/embedding_store.sqlite` tam yolu."""
     return os.path.join(cache_dir(), "embedding_store.sqlite")
 
 
@@ -107,6 +90,7 @@ def store_path(name: str) -> str:
 # ── TAG'E GORE COGUL katman ───────────────────────────────────────────────
 
 def builds_root() -> str:
+    """`data/builds/` tam yolu."""
     return _data("builds")
 
 
@@ -117,14 +101,17 @@ def build_dir(tag: str, stage: str) -> str:
 
 
 def workspace_dir(tag: str, l2: str | None = None) -> str:
+    """`data/workspace/<tag>/<l2>/` tam yolu."""
     return _data("workspace", tag, l2 or config.default_l2())
 
 
 def dist_dir(tag: str, l2: str | None = None) -> str:
+    """`data/dist/<tag>/<l2>/` tam yolu."""
     return _data("dist", tag, l2 or config.default_l2())
 
 
 def logs_dir(tag: str, l2: str | None = None) -> str:
+    """Bir kosunun log dizini."""
     return os.path.join(workspace_dir(tag, l2), "logs")
 
 
@@ -160,6 +147,7 @@ def list_tags() -> list[str]:
 
 
 def resolve_tag(explicit: str | None = None) -> str:
+    """Aktif tag'i sirayla arguman->env->konfig->tek-workspace kurallarina gore cozer; belirsizse SystemExit."""
     if explicit:
         return explicit
 

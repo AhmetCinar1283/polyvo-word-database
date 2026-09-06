@@ -8,8 +8,10 @@ venv/
 __pycache__/
 *.py[cod]
 *.egg-info/
-build/
-dist/
+# Paket kurulum ciktilari — YALNIZCA kok dizinde. Basindaki `/` sart:
+# `build/` deseni `src/polyvo/dictionary/build/` paketini de yok sayardi.
+/build/
+/dist/
 
 .env
 .pytest_cache/

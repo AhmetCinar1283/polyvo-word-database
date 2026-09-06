@@ -1,50 +1,15 @@
 """
-Model kalite siralamasi — hangi modelin kararinin hangisini EZEBILECEGI.
+Model kalite siralamasi — `tier`'in ALTINDA ikinci bir sira: ayni tier'daki
+(orn. tier=3, hepsi LLM) modeller arasinda hangisi hangisini ezebilir.
 
-NEDEN VAR: `src/core/stores.py::_should_write` "daha guvenilir kaynak yazar"
-kuralini `tier` uzerinden uygular (`human=0 < lang_db=1 < lang_db_llm=2 <
-llm=3`). Ama TUM LLM sonuclari tek bir duz `tier=3`'e dusuyordu: Gemini ile
-`qwen3:8b` ayirt edilemiyordu, dolayisiyla guclu bir model zayif bir modelin
-BOZUK satirini duzeltemiyordu. Olculen durum (2026-08-17): sense store'da
-1.862 satir `local:qwen3:8b`, 138 satir `local:qwen3:14b` — hepsi `tier=3`.
+Anahtar `label`'dir (`label_prefix+model`, orn. `local:qwen3:8b`) — depoda
+zaten saklanan deger, yeni bir kimlik icat edilmez. Rank HICBIR tabloya
+yazilmaz, her okumada `model_quality.json`'dan turetilir: config'i elle
+duzenlemek aninda gecerli olsun, geriye donuk "hangi satir hangi modeldendi"
+yeniden etiketlemesi (migration) hic gerekmesin.
 
-Bu modul `tier`'in ALTINA ikinci bir siralama ekler. Karsilastirma artik
-`(tier, model_rank)` sozluk sirasi: `lang_db` hala her LLM'in ustundedir,
-insan hala dokunulmazdir, ama ayni tier icinde modeller arasinda sira vardir.
-
---------------------------------------------------------------------------
-ANAHTAR: `label`, YENI BIR KIMLIK DEGIL
---------------------------------------------------------------------------
-Siralama `label` ile anahtarlanir (`label_prefix + model`, ornegin
-`local:qwen3:8b`) — cunku bu deger:
-
-  * depolarda `model_name` sutununda ZATEN sakli (uc depo, `paragraphs` dahil),
-  * LLM onbellek anahtarinin da parcasi (`cache.py::hash_prompt`).
-
-Yani yeni bir kimlik kavrami icat edilmiyor; var olan ve zaten yazilan deger
-okunuyor. `ollama` ile `colab` ayni `local:` onekini BILEREK paylasir
-(`providers/colab.py` docstring'i) — ayni agirliklar, ayni kalite, ayni rank.
-
---------------------------------------------------------------------------
-SUTUN YOK, BACKFILL YOK
---------------------------------------------------------------------------
-Rank hicbir tabloya YAZILMAZ; okuma aninda `model_name`'den turetilir. Iki
-sebep:
-
-  1. Config'i elle duzenlemek ANINDA her yerde gecerli olur. Rank bir sutuna
-     yazilsaydi, siralamayi degistiren her duzenlemeden sonra tum depolarin
-     yeniden etiketlenmesi gerekirdi.
-  2. `model_name`'e bakip tier/rank YAZAN bir migration tehlikeli olurdu:
-     olculdu (2026-08-17) — `translation_store`'da 5 INSAN ONAYLI (`tier=0`)
-     satir `model_name='local:qwen3:8b'` tasiyor. Boyle bir migration o
-     onaylari makine satiri sanip bozardi.
-
---------------------------------------------------------------------------
-DOSYA TEK DOGRULUK KAYNAGI
---------------------------------------------------------------------------
-Desen `src/stages/content/stoplist.py`ten alindi: dosya yoksa varsayilan BIR
-KEZ yazilir, sonrasinda elle duzenlenebilir ve dosya kazanir. Gizli bilgi
-degil, bir KARAR oldugu icin proje kokunde durur ve git'e girer.
+`model_quality.json` yoksa varsayilanlarla BIR KEZ yazilir, sonra dosya
+kazanir (elle duzenlenebilir, git'e girer).
 """
 
 from __future__ import annotations
@@ -66,39 +31,25 @@ __all__ = [
 
 CONFIG_FILENAME = "model_quality.json"
 
-# Config'de adi gecmeyen her label bu rank'e duser — yani "bilmiyorum" EN KOTU
-# demektir, "ortalama" degil. Bilinmeyen bir model sessizce iyi sayilip
-# Gemini'nin duzeltmesini engellemesin.
+# Bilinmeyen model bu rank'e duser: "bilmiyorum" EN KOTU demektir, ortalama degil.
 DEFAULT_RANK = 90
 
-# Kucuk = daha guvenilir. 10'luk bosluklar BILEREK: araya yeni bir model
-# girdiginde mevcut hicbir numara degismesin (numaralar depoda saklanmiyor,
-# ama config'i elle duzenleyen insan icin de ayni kolaylik gecerli).
-#
-# AYNI RANK = BIRBIRINI EZMEZ (ilk yazan kalir). Bu kasitli: esit kalitede iki
-# model arasinda gidip gelmek sadece bosa API harcamasi olurdu.
+# Kucuk = daha guvenilir. 10'luk bosluklar: araya yeni model eklenince mevcut
+# numaralar degismesin. Ayni rank BIRBIRINI EZMEZ (ilk yazan kalir).
 DEFAULT_RANKS: dict[str, int] = {
     "gemini:gemini-2.5-pro": 10,
-    # Gemini 2.5 Flash ile Cloudflare'in 70B'si BILEREK ayni seviyede:
-    # aralarindaki farki tahmin etmek yerine `content-review stats`in model
-    # kirilimiyla olcup gerekirse sonra ayirmak icin.
     "gemini:gemini-2.5-flash": 20,
     "cloudflare:@cf/meta/llama-3.3-70b-instruct-fp8-fast": 20,
     "openai:gpt-4o-mini": 20,
-    # DeepSeek olculmeden Flash sinifina ALINMIYOR: yanlis varsayim halinde
-    # Gemini onun ciktisini artik duzeltemez hale gelirdi (ayni rank ezmez).
     "deepseek:deepseek-chat": 30,
-    # `local:` oneki ollama ve colab tarafindan PAYLASILIR — ayni model etiketi
-    # ayni agirliklar demek, dolayisiyla ayni rank (bkz. providers/colab.py).
+    "cloudflare:@cf/qwen/qwen3-30b-a3b-fp8": 40,
+    # `local:` oneki ollama+colab arasinda PAYLASILIR (ayni model = ayni rank).
     "local:qwen3:14b": 40,
     "local:qwen3:8b": 50,
     "cloudflare:@cf/meta/llama-3.1-8b-instruct": 50,
 }
 
-# Saglayici seviyesi yedek. "Yeni model ekleyince config'e eklensin" isteginin
-# yumusak hali: config'e girmemis bir `gemini:gemini-3-flash` en kotuye degil,
-# Gemini bandina duser. Yine de `verify_pipeline` §9 her kayitli saglayicinin
-# VARSAYILAN modelinin acikca listelenmis olmasini sart kosar.
+# Config'e girmemis yeni bir model, en kotuye degil kendi saglayici bandina duser.
 DEFAULT_PREFIX_RANKS: dict[str, int] = {
     "gemini:": 20,
     "openai:": 20,
@@ -110,23 +61,14 @@ DEFAULT_PREFIX_RANKS: dict[str, int] = {
 
 @dataclass(frozen=True)
 class ModelQuality:
+    """Yuklenmis rank tablosu + `rank_for` aramasi."""
     ranks: dict[str, int]
     prefix_ranks: dict[str, int]
     default_rank: int
 
     def rank(self, label: str | None) -> int:
-        """Bir label'in kalite rank'i. ASLA raise etmez.
-
-        Sira: LLM'siz satir -> birebir eslesme -> en UZUN prefix eslesmesi ->
-        `default_rank`.
-
-        `None`/bos icin 0 doner: bu satiri hicbir LLM uretmedi (`lang_db`,
-        `single_sense` ya da insan yolu). 0 "en iyi" demek gibi gorunur ama
-        etkisi yoktur — o satirlarin `tier`'i zaten daha dusuktur ve
-        karsilastirma once `tier`'e bakar. Buraya `default_rank` koymak, bir
-        sozluk satirini "bilinmeyen model" gibi gosterip zayif bir LLM'in onu
-        ezmesine izin verirdi.
-        """
+        """Sira: birebir eslesme -> en uzun prefix -> `default_rank`.
+        `None`/bos icin 0 (LLM'siz satir; `tier` zaten onu korur)."""
         if not label:
             return 0
         if label in self.ranks:
@@ -150,6 +92,7 @@ def quality_config_path() -> str:
 
 
 def _defaults() -> ModelQuality:
+    """Kod-ici varsayilan siralamadan bir `ModelQuality` uretir."""
     return ModelQuality(
         ranks=dict(DEFAULT_RANKS),
         prefix_ranks=dict(DEFAULT_PREFIX_RANKS),
@@ -158,13 +101,8 @@ def _defaults() -> ModelQuality:
 
 
 def _normalize(raw: dict) -> ModelQuality:
-    """Diskteki sekli mevcut sekle tasir + dogrular.
-
-    `src/core/paths.py::_normalize` deseni: her yuklemede kosar, boylece eski
-    bir dosya sekli calismaya devam eder. Bozuk/eksik alanlar VARSAYILANA
-    duser — elle duzenlenen bir dosyadaki tek bir yazim hatasi tum boru
-    hattini durdurmasin.
-    """
+    """Diskteki sekli dogrular; bozuk/eksik alan VARSAYILANA duser (tek
+    yazim hatasi tum boru hattini durdurmasin)."""
     ranks = {
         str(k): int(v)
         for k, v in (raw.get("ranks") or {}).items()
@@ -186,11 +124,7 @@ def _normalize(raw: dict) -> ModelQuality:
 
 
 def load_model_quality(path: str | None = None) -> ModelQuality:
-    """Config'i yukler; yoksa varsayilani BIR KEZ yazip onu doner.
-
-    Surec icinde bir kez cache'lenir (`reset_cache()` ile bosaltilabilir —
-    yalnizca testler/verify icin).
-    """
+    """Config'i yukler (surec-ici cache'li); yoksa varsayilani BIR KEZ yazar."""
     global _CACHED
     if _CACHED is not None and path is None:
         return _CACHED
@@ -201,8 +135,7 @@ def load_model_quality(path: str | None = None) -> ModelQuality:
             with open(target, encoding="utf-8") as f:
                 config = _normalize(json.load(f))
         except (OSError, json.JSONDecodeError) as exc:
-            # Bozuk dosya yuzunden pahali bir kosu DUSMEZ; ama sessiz de
-            # kalmaz, cunku siralama artik varsayilana donmus demektir.
+            # Bozuk dosyada kosu DUSMEZ, ama sessiz de kalmaz.
             print(f"[model-quality] {target} okunamadi ({type(exc).__name__}: {exc}) — "
                   f"varsayilan siralama kullaniliyor.")
             config = _defaults()
@@ -216,6 +149,7 @@ def load_model_quality(path: str | None = None) -> ModelQuality:
 
 
 def _write_defaults(target: str, config: ModelQuality) -> None:
+    """Varsayilan siralamayi dosyaya BIR KEZ yazar (elle duzenlenebilir)."""
     payload = {
         "_comment": (
             "Model kalite siralamasi. Kucuk sayi = daha guvenilir; ayni rank'teki iki "
@@ -234,8 +168,7 @@ def _write_defaults(target: str, config: ModelQuality) -> None:
             json.dump(payload, f, ensure_ascii=False, indent=2)
             f.write("\n")
     except OSError as exc:
-        # Yazilamazsa (salt-okunur checkout, izin) kosu DEVAM eder: bellekteki
-        # varsayilanlar zaten dogru siralamayi verir.
+        # Yazilamazsa kosu DEVAM eder — bellekteki varsayilanlar yeterli.
         print(f"[model-quality] {target} yazilamadi ({exc}) — varsayilan siralama bellekten kullaniliyor.")
 
 

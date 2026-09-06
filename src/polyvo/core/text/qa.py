@@ -1,15 +1,11 @@
 """
-Uretilen L2 metni uzerinde calisan, LLM GEREKTIRMEYEN ortak metin yardimcilari.
+Uretilen L2 metni uzerinde calisan, LLM GEREKTIRMEYEN ortak metin yardimcilari
+(hedef kelime metinde geciyor mu, cumle bolme, yuzey-bicim karsilastirma).
+Kopyalamak yerine tek yerde — bir kelimenin "gectigi" karari her cagiran
+dosyada ayni olmali.
 
-`paragraph_gen.py` (F4/F5), `cloze_gen.py` (F5) ve `translation_sync.py` (F6)
-ayni yuzey-bicim eslestirmesini ve ayni cumle bolucusunu kullanir. Kopyalamak
-yerine tek yerde tanimli: bir kelimenin metinde "gectigi" kararinin uc dosyada
-farkli davranmasi, span'lerin (dolayisiyla cloze bosluklarinin ve dokunma
-hedeflerinin) sessizce kaymasi demekti.
-
-DIKKAT: buradaki hicbir fonksiyon prompt METNINE girmez — sadece cikti
-denetimi yapar. Bu yuzden burayi degistirmek `llm_cache`'i GECERSIZLESTIRMEZ
-(prompt degisiklikleri gecersizlestirir, bkz. MASTER_PLAN § 5/ZORUNLU 3).
+DIKKAT: prompt METNINE girmez, sadece cikti denetler — burayi degistirmek
+`llm_cache`i gecersizlestirmez.
 """
 
 import re
@@ -28,19 +24,10 @@ __all__ = [
     "MIN_SHARED_PREFIX",
 ]
 
-# Ingilizce oldugunu dogrulamak icin ucuz bir sinyal: bu kok kelimelerden
-# hicbiri gecmiyorsa metin muhtemelen yanlis dilde ya da bozuk.
-#
-# 2026-08-17: genisletildi. Eski liste (~16 kelime) gercek Ingilizce cumleleri
-# de kacirabiliyordu — orn. "She quickly jumped over that fence!" listedeki
-# hicbir kelimeyi icermiyor ve yanlis dil sanilip reddediliyordu (retry artik
-# YOK, bkz. MAX_ATTEMPTS notu — yanlis red artik bir sonraki denemede kendini
-# duzeltmiyor, dogrudan kalici reddedilmis satir oluyor). Liste artik
-# Ingilizce'nin en yaygin fonksiyon kelimelerinin (zamir, yardimci fiil, edat,
-# baglac, soru kelimesi) buyuk cogunlugunu kapsiyor — dogal bir Ingilizce
-# cumlenin bunlarin HICBIRINI icermemesi pratikte imkansiza yakin, ama
-# gercekten yanlis dildeki (orn. tamamen Turkce/baska dil) bir cikti yine de
-# yakalanir.
+# Ingilizce oldugunu dogrulamak icin ucuz sinyal: bu fonksiyon kelimelerinin
+# (zamir/yardimci fiil/edat/baglac/soru) hicbiri gecmiyorsa metin muhtemelen
+# yanlis dilde. Liste genis tutuldu — dogal bir Ingilizce cumlenin HICBIRINI
+# icermemesi pratikte imkansiza yakin, gercek yanlis-dil yine de yakalanir.
 ENGLISH_MARKERS = re.compile(
     r"\b("
     r"the|a|an|and|or|but|nor|so|if|as|than|then|that|this|these|those|"
@@ -64,20 +51,9 @@ _VOWELS = "aeiou"
 
 
 def _inflected_forms(headword: str) -> list[str]:
-    """Hedef kelimenin olasi yuzey formlari: kok + yaygin cekim ekleri, ayrica
-    Ingilizce'nin duzenli yazim degisikliklerini de kapsar (tam morfoloji
-    degil — bariz, sik gorulen kaliplar icin yeterli bir yaklasim):
-
-    - dogrudan ek: -s/-es, -d/-ed, -ing, -'s          (jump -> jumps/jumped)
-    - sondaki 'e' -ing'den once dusuyor                (hope -> hoping)
-    - CVC tek heceli fiillerde unsuz ikizlenmesi        (jam -> jammed/jamming)
-    - unsuz+y -> -ied/-ies                              (try -> tried/tries)
-
-    Onceki (`root + (e?s|e?d|ing|'s)?`) hali bu son iki kalibi hic
-    yakalamiyordu: "jammed" icin "jam" + "ed" arasinda ikizlenmis "m" aradaydi,
-    regex onu tek bir gecikmeli-eslesme olarak goremiyordu. Sonuc, LLM'in
-    dogru urettigi bir cumlenin "hedef kelime cumlede yok" diye reddedilmesiydi
-    (ekstra deneme = bosuna API cagrisi)."""
+    """Hedef kelimenin olasi yuzey formlari: kok + duzenli Ingilizce cekim
+    ekleri (-s/-ed/-ing/-'s, e-dusmesi, CVC ikizlenmesi, y->ied/ies).
+    Tam morfoloji degil, bilinen kaliplar icin yeterli bir yaklasim."""
     base = headword.lower()
     forms = {base, base + "s", base + "es", base + "d", base + "ed", base + "ing", base + "'s"}
 
@@ -118,29 +94,14 @@ def find_spans(text: str, headword: str) -> list[tuple[int, int, str]]:
 
 
 _WORD_RE = re.compile(r"[A-Za-z']+")
-# TURETME EKLERI BILEREK YOK. (Ahmet, 2026-08-17: "healthy aslinda yanlis bir
-# kelime burada da uyari almaliyim.") Ayrim dilbilimsel ve pedagojik olarak ayni
-# yerden gecer:
-#   CEKIM (inflection) = AYNI kelime, farkli gramer bicimi — meant/mean,
-#     left/leave, children/child, jumps/jumped. Ogrenci hedef kelimeyle
-#     KARSILASMIS sayilir, dolayisiyla eslesmeli.
-#   TURETME (derivation) = BASKA bir kelime — healthy/health, musical/music,
-#     independently/independent. Farkli lemma, cogu zaman farkli POS. Modul
-#     zaten prompt'ta "bu kelimeyi ISIM olarak kullan" diyor (`_POS_PHRASE`),
-#     yani `health` istenirken `healthy` gelmesi talimatin ihlali — tam olarak
-#     Ahmet'in gormek istedigi durum.
-# `wn.morphy` yalnizca cekim cozumler, bu yuzden dogru araç odur; ek bir
-# turetme katmani eklemek uyariyi susturur, iyilestirmez.
+# TURETME EKLERI BILEREK YOK: CEKIM (mean/meant) AYNI kelimedir ve eslesmeli,
+# TURETME (health/healthy) BASKA kelimedir ve eslesMEMELI (farkli POS/lemma).
+# `wn.morphy` yalnizca cekim cozer, bu yuzden dogru arac budur.
 
 
 def _morphy_roots(token: str) -> set[str]:
-    """`token`un WordNet'e gore olasi kokleri. WordNet yoksa bos kume.
-
-    Regex tabanli `_inflected_forms` DUZENLI cekimleri kapsar ama duzensizleri
-    kapsayamaz (mean->meant, leave->left, man->men) — bunlar sonlu ama genis bir
-    liste ve elle yazilmasi anlamsiz. WordNet'in `morphy`si bu tabloyu zaten
-    tasiyor.
-    """
+    """`token`un WordNet'e gore olasi kokleri (duzensiz cekimler icin —
+    mean->meant, leave->left — regex bunlari kapsayamaz). WordNet yoksa bos kume."""
     try:
         from nltk.corpus import wordnet as wn
     except Exception:
@@ -157,13 +118,8 @@ def _morphy_roots(token: str) -> set[str]:
 
 
 def find_spans_loose(text: str, headword: str) -> list[tuple[int, int, str]]:
-    """`find_spans` + duzensiz cekimler (meant->mean, left->leave, children->child).
-
-    Cloze icin gerekli: orada hedef kelimenin metinde GECMESI yetmez, tam
-    KONUMU da lazim (bosluk oradan acilir), yani `mentions_target`in bool'u ise
-    yaramaz. Regex bulursa o kullanilir; bulamazsa metnin her sozcugu WordNet
-    `morphy` ile koke indirilip headword'e esit olanlarin span'i dondurulur.
-    """
+    """`find_spans` + duzensiz cekimler (meant->mean, left->leave). Cloze icin
+    gerekli: orada hedef kelimenin TAM KONUMU lazim, sadece varligi degil."""
     spans = find_spans(text, headword)
     if spans:
         return spans
@@ -176,19 +132,9 @@ def find_spans_loose(text: str, headword: str) -> list[tuple[int, int, str]]:
 
 
 def mentions_target(text: str, headword: str) -> bool:
-    """Hedef kelime metinde geciyor mu — `find_spans`ten DAHA gevsek.
-
-    Iki katman, ikisi de YALNIZCA cekim (bkz. yukaridaki turetme notu):
-      1. `surface_pattern` (duzenli cekimler)  — jump/jumps/jumped/jumping
-      2. WordNet `morphy` ile kok esitligi     — meant->mean, left->leave, children->child
-
-    Turetilmis bicimler (healthy/health, musical/music) bilerek eslesMEZ:
-    onlar baska kelimelerdir ve ogrenci hedef kelimeyle karsilasmis olmaz.
-
-    NEDEN GEVSEK OLAN KISIM GEVSEK: bu kontrol bir RED sebebi degil, yalnizca
-    bir UYARI (bkz. `paragraph_gen.run_qa`) — yanlis pozitifin maliyeti bir
-    insan incelemesi, yanlis reddin maliyeti bosa giden API cagrilariydi.
-    """
+    """Hedef kelime metinde geciyor mu — `find_spans`ten DAHA gevsek: duzenli
+    cekim + WordNet kok esitligi (yalnizca cekim, turetme DEGIL). Bu bir RED
+    sebebi degil UYARI — yanlis pozitifin maliyeti dusuk, yanlis reddin yuksek."""
     if find_spans(text, headword):
         return True
     base = headword.lower()
@@ -209,62 +155,32 @@ def split_sentences(text: str) -> list[str]:
 
 
 def normalized_hash_text(text: str) -> str:
-    """Tekrar tespiti icin normalize edilmis metin (bosluk daraltilmis, kucuk
-    harf). Hash'in KENDISI degil, hash'e girecek metin — cagiran taraf istedigi
-    hash fonksiyonunu uygular."""
+    """Tekrar tespiti icin normalize metin (bosluk daraltilmis, kucuk harf) —
+    hash'in kendisi degil, hash'e girecek girdi."""
     return re.sub(r"\s+", " ", (text or "").strip().lower())
 
 
-# ===========================================================================
-# DIL-BAGIMSIZ yuzey karsilastirmasi — F6 terim tutarliligi kapisi (2026-08-22)
-# ===========================================================================
+# DIL-BAGIMSIZ yuzey karsilastirmasi — terim tutarlilik kapisi icin taban.
+# Amac: sozlukteki bicim ("kulak") ile cekimli cumledeki bicimi ("kulağımla")
+# birbirine YAKIN sayabilmek. Tam esitlik/onek yetmez (unsuz yumusamasi,
+# unlu dusmesi, diyakritik farki onegi kirar) — cozum PAYLASILAN ONEK UZUNLUGU.
+# Hata yonu bilincli: FAZLA eslesmek kabul edilir, YANLIS ALARM edilmez.
 #
-# NEDEN BURADA: bu blok L1 (ana dil) metnine bakar, oysa dosyanin geri kalani
-# L2 (Ingilizce) uretimini denetler. Yine de buraya ait: icindeki hicbir kural
-# BIR DILE OZGU DEGIL. Dile ozgu her sey `lang_rules/<l1>.py`de yasar
-# (CLAUDE.md doktrini) — burasi o modulun UZERINE oturdugu taban.
-#
-# COZULEN HATA (olculdu 2026-08-22): terim kapisi sozlukteki bicimi
-# ("çalışma", "kulak", "kâbus") cekimli cumlede ("çalışıyoruz", "kulağımla",
-# "kabusla") ARIYOR ve bulamayinca satiri `quality='low'` isaretliyordu.
-# 100 ornekli elle siniflandirmada bu tur MORFOLOJI kaynakli yanlis alarm
-# %18 idi. Eski kod bunu "iki yonlu onek iliskisi" ile yakalamaya calisiyordu,
-# ama onek iliskisi UC yerde kiriliyor:
-#   1) unsuz yumusamasi   kulak  -> kulağımla   (k/ğ)
-#   2) unlu dusmesi       keşif  -> keşfim
-#   3) diyakritik/ASCII   kâbus  -> kabusla,  halı -> "hali" (bozuk gloss)
-# Ucu de "ortak ONEK'in bir yerinde bir harf degisiyor" seklinde tezahur
-# ediyor — yani cozum tam esitlik ya da onek DEGIL, PAYLASILAN ONEK UZUNLUGU.
-#
-# HATA YONU (degismedi, bilincli): kapi "bulunamadi" derse satir SUPHELI
-# isaretlenir. Yani FAZLA eslesmek (gercek bir uyusmazligi kacirmak) kabul
-# edilebilir; YANLIS ALARM kabul edilemez. Esikler bu yone gore secildi.
-#
-# GARANTI SINIRI — YENI L1 EKLERKEN OKU: buradaki mantik SONEKLI dillerde
-# (kok basta kalir) gecerlidir. Almanca'nin `ge-` on ekli sifat-fiili
-# (gehen -> gegangen, ortak onek "ge" = 2) ya da Rusca'nin on ekli fiilleri
-# bu varsayimi bozar ve kapi HER cumleyi isaretlemeye baslar. Bu yuzden kapi
-# `lang_rules/<l1>.TERM_MATCH_SUPPORTED` bayragini acikca isaretlemeyen bir
-# dilde HIC CALISMAZ (bkz. translation_sync.gloss_appears_in). Guvenilmez bir
-# uyari, uyari yoklugundan kotudur: kimse bakmaz, ama herkesin sayilarini
-# bozar.
+# SONEKLI dillerde (kok basta) gecerlidir; on-ekli dillerde (Almanca, Rusca)
+# gecerli degildir — bu yuzden `lang/<l1>.TERM_MATCH_SUPPORTED` acikca
+# isaretlemeyen dilde bu kapi hic calismaz.
 
 MIN_SHARED_PREFIX = 3
 
-# Turkce'nin noktasiz `ı`si Unicode'da diyakritikli bir harf DEGILDIR (kendi
-# kod noktasi), yani NFKD onu `i`ye indirgemez — acikca eslenmesi gerekir.
-# Buyuk `İ`nin kucugu `i` + birlesik nokta oldugu icin NFKD zaten hallediyor.
+# Turkce'nin noktasiz `ı`si NFKD ile `i`ye inmez (diyakritikli degil, kendi
+# kod noktasi) — acikca eslenir. Buyuk `İ` icin NFKD zaten yeterli.
 _FOLD_EXTRA = {"ı": "i"}
 
 
 def fold_for_match(word: str) -> str:
-    """Karsilastirma icin normalize edilmis kelime: kucuk harf, diyakritiksiz,
-    yalniz alfanumerik.
-
-    `ş->s, ğ->g, ç->c, ö->o, ü->u, â->a, é->e` NFKD ile duser; `ı->i` elle
-    eslenir. Ustunde durulacak nokta: bu katman BILEREK bilgi kaybettirir
-    (Almanca `schön`/`schon` ayni yazilir hale gelir) — cunku kaybin yonu
-    "fazla eslesme"dir ve kapinin kabul ettigi yon budur."""
+    """Karsilastirma icin normalize kelime: kucuk harf, diyakritiksiz, yalniz
+    alfanumerik. BILEREK bilgi kaybettirir (fazla eslesme yonunde) — kapinin
+    kabul ettigi yon budur."""
     w = (word or "").strip().lower()
     for src, dst in _FOLD_EXTRA.items():
         w = w.replace(src, dst)
@@ -284,17 +200,9 @@ def shared_prefix_len(a: str, b: str) -> int:
 
 
 def loose_same_word(a: str, b: str, min_shared: int = MIN_SHARED_PREFIX) -> bool:
-    """Iki yuzey bicim AYNI sozcugun bicimleri olabilir mi?
-
-    "Olabilir mi" — "midir" degil. Bu fonksiyon bir morfolojik cozumleyici
-    DEGILDIR ve olmaya calismaz; tek isi bir uyari kapisinin yanlis alarm
-    uretmesini engellemek.
-
-    Kural (normalize edilmis bicimler uzerinde):
-      1. esit                              -> True
-      2. biri digerinin oneki (>= 2 harf)  -> True   ("ev" / "evde")
-      3. ortak onek >= `min_shared`        -> True   ("kesif" / "kesfim")
-    """
+    """Iki yuzey bicim AYNI sozcugun bicimleri OLABILIR mi (morfolojik
+    cozumleyici degil). Kural: esit, ya da biri digerinin oneki (>=2 harf),
+    ya da ortak onek >= `min_shared`."""
     fa, fb = fold_for_match(a), fold_for_match(b)
     if not fa or not fb:
         return False

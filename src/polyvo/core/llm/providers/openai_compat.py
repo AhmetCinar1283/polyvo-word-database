@@ -1,15 +1,7 @@
 """
 OpenAI-uyumlu `/chat/completions` adapter — TEK sinif, BIRDEN COK kayit.
-
-Bircok saglayici (OpenAI, DeepSeek, Groq, yerelde calisan LM Studio/vLLM)
-ayni `/v1/chat/completions` sozlesmesini konusur: `Authorization: Bearer`,
-`{"model", "messages", "response_format": {"type":"json_object"}}` govdesi.
-Bu yuzden her biri icin ayri bir dosya yerine tek bir `OpenAICompatibleProvider`
-tabani var; somut saglayicilar sadece `name`/`label_prefix`/`default_model`/
-`base_url`/`env_keys` degerlerini gecen kucuk alt siniflar.
-
-YENI BIR OpenAI-UYUMLU SAGLAYICI EKLEMEK icin (orn. Groq): asagidaki gibi 6
-satirlik bir sinif + `providers/__init__.py`'ye bir import satiri yeter.
+Somut saglayicilar (OpenAI, DeepSeek) sadece `name`/`label_prefix`/
+`default_model`/`base_url`/`env_keys` gecen kucuk alt siniflar.
 """
 
 from __future__ import annotations
@@ -30,26 +22,20 @@ class OpenAICompatibleProvider(LLMProvider):
     default_base_url: str = ""
     needs_api_key: bool = True
 
-    #: BULGU (2026-08-17): "hybrid thinking" modeller (Qwen3, DeepSeek-R1...)
-    #: cevap vermeden ONCE uzun bir akil yurutme blogu uretir ve `max_tokens`
-    #: butcesi bu blok tarafindan tuketilir — JSON cevap HIC gelmez.
-    #: `ollama.py` bunu ta 2026-08-13'te `think: false` ile cozmustu; bu
-    #: protokolde karsiligi `chat_template_kwargs.enable_thinking`.
-    #: Olculen (@cf/qwen/qwen3-30b-a3b-fp8, max_tokens=100):
-    #:   kapali degilken -> finish_reason=length, content=None, 3.4 neuron
-    #:   kapaliyken      -> finish_reason=stop, gecerli JSON, 0.8 neuron
-    #: Yani duzeltme sadece dogru degil, 4 KAT DA UCUZ. Dusunmeyen modelleri
-    #: bozmaz (llama-3.3-70b'de cikti birebir ayni olculdu), ama gercek
-    #: OpenAI/DeepSeek uc noktalari bilinmeyen govde alanini reddedebilir, o
-    #: yuzden varsayilan KAPALI — saglayici acikca acar (bkz. cloudflare.py).
+    #: Hybrid-thinking modeller (Qwen3, DeepSeek-R1) cevaptan once uzun bir
+    #: akil yurutme blogu uretip `max_tokens` butcesini tuketir, JSON hic
+    #: gelmez. Varsayilan KAPALI: gercek OpenAI/DeepSeek uc noktalari
+    #: bilinmeyen govde alanini reddedebilir — saglayici acikca acar (cloudflare.py).
     disable_thinking: bool = False
 
     def __init__(self, model: str | None = None, *, api_key: str | None = None, base_url: str | None = None, **opts):
+        """API anahtari + taban URL'i coz (arguman->env->varsayilan) ve kaydet."""
         super().__init__(model, api_key=api_key, base_url=base_url, **opts)
         self.api_key = resolve_secret(self.name, self.env_keys, explicit=api_key)
         self.base_url = resolve_setting(self.name, "base_url", explicit=base_url, default=self.default_base_url)
 
     def preflight(self) -> None:
+        """API anahtari gerekiyorsa tanimli mi kontrol eder; degilse acik hata."""
         if self.needs_api_key and not self.api_key:
             raise LLMUnavailable(
                 f"{self.name} icin API anahtari tanimli degil. "
@@ -66,6 +52,7 @@ class OpenAICompatibleProvider(LLMProvider):
                               retryable=retryable, retry_after=retry_after)
 
     def _request(self, prompt: str, *, max_tokens: int, temperature: float) -> str:
+        """`/chat/completions`e istek atar, cevap metnini doner."""
         if self.needs_api_key and not self.api_key:
             raise LLMUnavailable(f"{self.name} icin API anahtari tanimli degil.")
 
@@ -94,9 +81,7 @@ class OpenAICompatibleProvider(LLMProvider):
         except urllib.error.HTTPError as exc:
             detail = exc.read().decode("utf-8", errors="replace")
             retryable = exc.code == 429 or exc.code >= 500
-            # 429'da sunucu genellikle `Retry-After` gonderir (saniye ya da
-            # HTTP-date). Sayi degilse yok sayilir ve exponential backoff'a
-            # dusulur — tarih ayristirmak icin bir bagimliligi hak etmiyor.
+            # `Retry-After` sayi degilse (HTTP-date) yok sayilir, backoff'a dusulur.
             retry_after = None
             if exc.code == 429:
                 raw_after = exc.headers.get("Retry-After") if exc.headers else None
@@ -108,11 +93,8 @@ class OpenAICompatibleProvider(LLMProvider):
         except urllib.error.URLError as exc:
             raise LLMUnavailable(f"{self.name} API'ye ulasilamadi: {exc}", retryable=True) from exc
         except TimeoutError as exc:
-            # Cikplak TimeoutError, URLError'in alt sinifi DEGIL (ozellikle
-            # okuma zaman asiminda ssl/socket katmanindan direkt gelir), o
-            # yuzden yukaridaki except'e girmez ve retry'siz cokerdi. Olculdu
-            # 2026-08-21: buyuk modellerde (llama-3.3-70b) 120s'lik timeout
-            # bazen yetmiyor — gecici sayilip retry'a birakiliyor.
+            # Cikplak TimeoutError, URLError'in alt sinifi DEGIL — ayri yakalanmazsa
+            # retry'siz coker.
             raise LLMUnavailable(f"{self.name} yanit zaman asimina ugradi (120s): {exc}", retryable=True) from exc
 
         try:
@@ -122,18 +104,13 @@ class OpenAICompatibleProvider(LLMProvider):
         except (KeyError, IndexError, TypeError, AttributeError):
             return json.dumps(body, ensure_ascii=False)[:2000]
 
-        # `reasoning_content`e DUSMEK gerekiyor: Cloudflare, dusunme kapaliyken
-        # bile Qwen3'un tek satirlik cevabini `content` yerine bu alana koyuyor
-        # (olculdu 2026-08-17: content=None, reasoning_content='{"primary": 2...}').
-        # Sadece `content`e bakan kod, dogru uretilmis bir cevabi bos sanardi.
+        # `reasoning_content`e dusmek gerekir: bazi saglayicilar dusunme
+        # kapaliyken bile cevabi `content` yerine buraya koyar.
         if text.strip():
             return text
 
-        # Hic metin gelmedi. Bu bir MODEL YETERSIZLIGI DEGIL, bir yapilandirma
-        # hatasidir ve HER ogede tekrar eder: 2026-08-17'de bu sessizlik, tek
-        # bir kosuda 404 gloss + 92 sense cagrisini (~3.000 neuron) hicbir uyari
-        # vermeden yakti ve depoya 254 uydurma satir yazdi. Beklemek bir sey
-        # degistirmeyecegi icin retryable DEGIL: hemen, sebebini soyleyerek dur.
+        # Hic metin gelmedi — bu bir yapilandirma hatasidir, HER ogede tekrar
+        # eder. Beklemek cozmez: retryable DEGIL, hemen sebebiyle dur.
         raise LLMUnavailable(
             f"{self.name} bos yanit dondurdu (finish_reason="
             f"{choice.get('finish_reason')!r}, model={self.model}).\n"
@@ -146,6 +123,8 @@ class OpenAICompatibleProvider(LLMProvider):
 
 @register
 class OpenAIProvider(OpenAICompatibleProvider):
+    """OpenAI'nin resmi Chat Completions uc noktasi."""
+
     name = "openai"
     label_prefix = "openai:"
     default_model = "gpt-4o-mini"
@@ -155,6 +134,8 @@ class OpenAIProvider(OpenAICompatibleProvider):
 
 @register
 class DeepSeekProvider(OpenAICompatibleProvider):
+    """DeepSeek'in OpenAI-uyumlu uc noktasi."""
+
     name = "deepseek"
     label_prefix = "deepseek:"
     default_model = "deepseek-chat"

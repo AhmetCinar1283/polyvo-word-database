@@ -1,17 +1,9 @@
 """
-Bir "app"in sozlesmesi — Django'nun AppConfig'ine karsilik gelen sey.
+Bir "app"in sozlesmesi. App KENDINI tanitir (komutlar, panel, bagimlilik);
+merkezde app listesi TUTULMAZ — `discovery.py` paketleri gezip `APP`'i bulur.
 
-Bir app KENDINI tanitir: hangi komutlari var, hangi panel sayfasini getiriyor,
-kime bagimli. Merkezde app listesi TUTULMAZ; `discovery.py` paketleri gezip
-`APP` degiskenini bulur. Yeni bir is eklemek = yeni bir klasor; hicbir mevcut
-dosya duzenlenmez. (Eski repoda bunun bedeli olculebilirdi: yeni bir uretim
-komutu `manage.py`'nin 437 satirini, `panel/server.py`'nin sabit import
-blogunu, `runner.py`'yi ve `review.py`'yi ayni anda degistirmeyi gerektiriyor,
-`reading` modulunun paneli de tam bu yuzden hic yazilmamisti.)
-
-BAGIMLILIK YONU (demir kural): app'ler yukari dogru import edemez. `depends`
-alani bu yuzden bir metin listesidir, import degil — `tests/test_layering.py`
-hem beyani hem gercek import grafigini kontrol eder.
+`depends` bir metin listesidir, import degil — `tests/test_layering.py` hem
+beyani hem gercek import grafigini kontrol eder (demir kural: yukari import yok).
 """
 
 from __future__ import annotations
@@ -46,6 +38,7 @@ class PanelPage:
 
 @dataclass
 class App:
+    """Bir app'in kendini tanittigi manifest — `APP` degiskeni bu tipte olur."""
     name: str
     help: str = ""
     commands: list[Command] = field(default_factory=list)
@@ -54,6 +47,7 @@ class App:
     depends: list[str] = field(default_factory=list)
 
     def command(self, name: str) -> Command | None:
+        """Adiyla bir komut bulur; yoksa `None`."""
         for cmd in self.commands:
             if cmd.name == name:
                 return cmd

@@ -1,23 +1,9 @@
 """
-Google Gemini adapter — `LLMProvider` sozlesmesinin Gemini uygulamasi.
+Google Gemini adapter — `LLMProvider`in Gemini uygulamasi.
 
-Bu dosya, onceden `src/core/llm/gemini.py`'de duran `call_gemini_json`'in
-HTTP/protokol kismini tasir; cache-first zarfi artik `base.py`de tek yerde.
-
-KORUNAN AYRINTILAR (davranis degismemeli):
-  - `responseMimeType: "application/json"` — JSON-constrained cikti.
-  - `timeout=120`, varsayilan `temperature=0.7`.
-  - Engellenmis/bos yanitta ham govde 2000 karaktere kirpilip `raw` olarak
-    dondurulur ki cagiran taraf deneme gunlugune yazabilsin (parse zaten None
-    donecek).
-  - API anahtari SADECE `polyvo.core.env.resolve_secret` uzerinden okunur —
-    onceden `os.environ`'u dogrudan okuyup hicbir `.env` yukleyicisi
-    cagirmiyordu (bkz. CLAUDE.md "does not work out of the box" maddesi);
-    artik ayni zincir Cloudflare ile paylasiliyor.
-  - Gecici hatalar (429/5xx) `retryable=True` ile isaretlenir — `base.py`
-    bunlari exponential backoff ile yeniden dener (Cloudflare'daki
-    `search.py::_cf_run` desenin ayni sekilde: `CF_RETRY_BASE_DELAY * 2**attempt`).
-
+`responseMimeType: "application/json"` ile JSON-constrained cikti; 429/5xx
+`retryable=True` isaretlenir (backoff `base.py`de). Engellenmis/bos yanitta
+ham govde kirpilip `raw` olarak donuyor (deneme gunlugu icin).
 Etiket oneki "gemini:" — DEGISTIRME, cache anahtarina giriyor.
 """
 
@@ -36,6 +22,7 @@ DEFAULT_API_BASE = "https://generativelanguage.googleapis.com/v1beta/models"
 
 @register
 class GeminiProvider(LLMProvider):
+    """Google Gemini API'sine istek atan saglayici."""
     name = "gemini"
     label_prefix = "gemini:"
     default_model = "gemini-2.5-flash"
@@ -43,10 +30,12 @@ class GeminiProvider(LLMProvider):
     needs_api_key = True
 
     def __init__(self, model: str | None = None, *, api_key: str | None = None, **opts):
+        """API anahtarini coz (arguman->env) ve kaydet."""
         super().__init__(model, api_key=api_key, **opts)
         self.api_key = resolve_secret("gemini", self.env_keys, explicit=api_key)
 
     def preflight(self) -> None:
+        """API anahtari tanimli mi kontrol eder; degilse acik hata."""
         if not self.api_key:
             raise LLMUnavailable(
                 "GEMINI_API_KEY ortam degiskeni tanimli degil. aistudio.google.com'dan "
@@ -54,6 +43,7 @@ class GeminiProvider(LLMProvider):
             )
 
     def _request(self, prompt: str, *, max_tokens: int, temperature: float) -> str:
+        """Gemini `generateContent` uc noktasina istek atar."""
         if not self.api_key:
             raise LLMUnavailable(
                 "GEMINI_API_KEY ortam degiskeni tanimli degil. aistudio.google.com'dan "
@@ -95,13 +85,12 @@ class GeminiProvider(LLMProvider):
             raw_text = ""
 
         if not raw_text:
-            # engellenmis/bos yanit (guvenlik filtresi, MAX_TOKENS'a carpma vb.)
-            # — ham govdeyi (kucultulmus) raw_text olarak birak ki cagiran taraf
-            # denem gunlugune yazabilsin; parse None donecek zaten.
+            # Engellenmis/bos yanit — kucultulmus ham govde deneme gunlugu icin.
             raw_text = json.dumps(body, ensure_ascii=False)[:2000]
 
         return raw_text
 
 
 def is_gemini_configured() -> bool:
+    """`GEMINI_API_KEY` tanimli mi (menude durum gostermek icin)."""
     return bool(resolve_secret("gemini", ("GEMINI_API_KEY",)))

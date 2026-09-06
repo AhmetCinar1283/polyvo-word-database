@@ -1,16 +1,9 @@
 """
-`polyvo` giris noktasi.
-
-Eski `manage.py`'den iki fark, ikisi de bilincli:
-
-  * ALT SUREC YOK. Eski dispatcher her komut icin yeni bir Python baslatiyor,
-    cikis kodunu elle geri tasiyordu. Burada komut bir fonksiyondur; cikis kodu
-    dogal olarak dogru, hata izi tektir, import maliyeti bir kez odenir.
-  * SABIT KOMUT LISTESI YOK. Alt-komutlar `discovery.find_apps()`'ten gelir.
+`polyvo` giris noktasi — alt surec YOK (komut = fonksiyon), sabit komut
+listesi YOK (`discovery.find_apps()`'ten gelir).
 
 Kullanim:  polyvo <app> <komut> [...]      orn. polyvo dict build --limit 500
-           polyvo apps                     yuklu app'ler ve komutlari
-           polyvo where                    cozulen yollar ve aktif tag
+           polyvo apps / where / init
 """
 
 from __future__ import annotations
@@ -23,6 +16,7 @@ from polyvo.core.cli import discovery
 
 
 def _cmd_apps(_args) -> int:
+    """`polyvo apps` — yuklu app'leri ve komutlarini listeler."""
     apps = discovery.find_apps()
     if not apps:
         print("Henuz hicbir app yuklu degil (katmanlar tasindikca burada gorunur).")
@@ -37,6 +31,7 @@ def _cmd_apps(_args) -> int:
 
 
 def _cmd_where(args) -> int:
+    """`polyvo where` — cozulen yollari ve aktif tag'i yazar."""
     print(f"kok            {config.project_root()}")
     print(f"konfig         {config.config_path()}")
     print(f"veri koku      {paths.data_root()}")
@@ -58,6 +53,7 @@ def _cmd_where(args) -> int:
 
 
 def _cmd_init(_args) -> int:
+    """`polyvo init` — `data/` altindaki global dizinleri olusturur."""
     paths.ensure_dirs()
     print(f"Veri dizinleri hazir: {paths.data_root()}")
     return 0
@@ -71,6 +67,7 @@ BUILTINS = [
 
 
 def build_parser() -> argparse.ArgumentParser:
+    """Kesfedilen app'lerden tam CLI ayristiricisini kurar."""
     parser = argparse.ArgumentParser(
         prog="polyvo", description="Polyvo kelime veritabani hatti")
     subs = parser.add_subparsers(dest="_app", metavar="<app>")
@@ -94,6 +91,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
+    """Giris noktasi: ayristir, ilgili komutu cagir, exit kodunu doner."""
     parser = build_parser()
     args = parser.parse_args(argv)
     handler = getattr(args, "_handler", None)

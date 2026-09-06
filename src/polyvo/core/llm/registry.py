@@ -1,15 +1,9 @@
 """
-LLM saglayici kayit defteri — Factory pattern.
+LLM saglayici kayit defteri (Factory). Kayit ACIK IMPORT ile (`providers/
+__init__.py`), dinamik dizin taramasi YOK.
 
-Kayit ACIK IMPORT ile yapilir (`providers/__init__.py`), dinamik dizin
-taramasi YOK: `tools/verify_pipeline.py` her modulu import ederken calisir
-(`except BaseException`), bu yuzden import aninda is yapan/dosya sistemi
-tarayan kod yasak (bkz. o dosyanin docstring'i).
-
-YENI SAGLAYICI EKLEMEK: `providers/<ad>.py` icinde bir `LLMProvider` alt
-sinifi yaz, `@register` ile isaretle, `providers/__init__.py`'ye bir import
-satiri ekle. Baska hicbir dosyaya dokunulmaz — `--provider` secenekleri,
-interaktif menu ve panel gosterimi otomatik kapsar.
+Yeni saglayici: `providers/<ad>.py`'de `LLMProvider` alt sinifi + `@register`,
+`providers/__init__.py`'ye import satiri. Baska dosyaya dokunulmaz.
 """
 
 from __future__ import annotations
@@ -29,6 +23,7 @@ _REGISTRY: dict[str, type[LLMProvider]] = {}
 
 
 def register(cls: type[LLMProvider]) -> type[LLMProvider]:
+    """Bir saglayici sinifini adiyla kayit defterine ekler."""
     if not cls.name:
         raise ValueError(f"{cls.__name__}.name bos olamaz")
     _REGISTRY[cls.name] = cls
@@ -36,10 +31,12 @@ def register(cls: type[LLMProvider]) -> type[LLMProvider]:
 
 
 def provider_names() -> list[str]:
+    """Kayitli tum saglayici adlari."""
     return sorted(_REGISTRY)
 
 
 def get_provider_class(name: str) -> type[LLMProvider]:
+    """Adiyla saglayici sinifini bulur; yoksa hata."""
     try:
         return _REGISTRY[name]
     except KeyError:
@@ -49,10 +46,12 @@ def get_provider_class(name: str) -> type[LLMProvider]:
 
 
 def create(name: str, model: str | None = None, **opts) -> LLMProvider:
+    """Adiyla bir saglayici ORNEGI kurar."""
     return get_provider_class(name)(model=model, **opts)
 
 
 def default_model(name: str) -> str:
+    """Bir saglayicinin varsayilan model adi."""
     return get_provider_class(name).default_model
 
 

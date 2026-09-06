@@ -1,15 +1,9 @@
 """
-App kesfi — merkezi liste YOK.
+App kesfi — merkezi liste YOK. `polyvo` altindaki paketlerde `app.py` (icinde
+`APP`) arar; bulunanlar hem CLI'a hem panele ayni kaynaktan beslenir.
 
-`polyvo` altindaki paketlerde `app.py` (icinde `APP`) arar. Bulunanlar hem
-CLI'a hem panele beslenir; ikisi ayni kaynagi kullandigi icin "komutu ekledim
-ama panelde gorunmedi" durumu YAPISAL OLARAK imkansiz.
-
-Import HATASI YUTULMAZ. Bir app import edilemiyorsa bu sessizce "o app yok"
-demek degil, kirik bir kurulum demektir; kesif bunu adiyla birlikte bildirir
-ve `--strict` ile hata koduna cevirir. (Eski repoda tam tersi olmustu: bir
-refactor'den sonra 22 modul import edilemez halde kalmis, hicbir komut sikayet
-etmemisti — o yuzden `verify` bugun once import ediyor.)
+Import HATASI YUTULMAZ: bir app import edilemiyorsa kirik bir kurulum demektir,
+kesif bunu adiyla bildirir ve `--strict` ile hata koduna cevirir.
 """
 
 from __future__ import annotations
@@ -35,6 +29,7 @@ _errors: list[tuple[str, BaseException]] = []
 
 
 def _iter_candidate_modules() -> list[str]:
+    """`polyvo.<paket>.app` bicimindeki tum alt paketlerin modul adlarini bulur."""
     names: list[str] = []
     for pkg_name in SEARCH_PACKAGES:
         try:
@@ -55,6 +50,7 @@ def _iter_candidate_modules() -> list[str]:
 
 
 def find_apps(*, strict: bool = False) -> list[App]:
+    """Her paketi import edip `APP` degiskenini toplar; hata yutulmaz."""
     _errors.clear()
     apps: list[App] = []
     seen: set[str] = set()
@@ -81,4 +77,5 @@ def find_apps(*, strict: bool = False) -> list[App]:
 
 
 def load_errors() -> list[tuple[str, BaseException]]:
+    """Son `find_apps` cagrisinda patlayan (modul, istisna) ciftleri."""
     return list(_errors)

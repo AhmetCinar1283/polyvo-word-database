@@ -1,20 +1,10 @@
 """
 LLM onbellegi — `data/cache/llm_cache.sqlite`.
 
-ANAHTAR: `sha256(model_name + '\\x1f' + prompt)[:32]`. Build'e ozgu HICBIR
-kimlik (tag, item_id, set_id, dosya yolu) anahtara girmez. Sonuc: `data/builds/`
-ve `data/workspace/` defalarca silinip yeniden uretilse bile onbellek sicak
-kalir; odenen her cagri bir kez odenir.
-
-KONUM: `data/cache/` altinda, `data/stores/` altinda DEGIL. Ikisi arasindaki
-fark "para" degil "yeniden uretilebilirlik": `cache/` para/GPU zamani odeyerek
-yeniden uretilebilir, `stores/` icinde INSAN kararlari da bulunan ve yeniden
-uretilemeyen katmandir.
-
-YAZMA KURALI: buraya yalnizca basariyla parse edilmis, kullanilabilir cevaplar
-yazilir. Parse hatasi veya API hatasiyla biten bir deneme cagiran kod tarafindan
-buraya hic ulastirilmamalidir — aksi halde gecici bir hata kalici bir "cevap"
-olarak onbellege yerlesir ve her yeniden kosuda bedavaya geri doner.
+Anahtar `sha256(model_name+prompt)`; build/tag/item_id GIRMEZ, bu yuzden
+`builds/`/`workspace/` silinip yeniden uretilse de onbellek sicak kalir.
+`cache/`da durur, `stores/`da DEGIL: para ile yeniden uretilebilir, insan
+karari degil. Yalnizca basariyla parse edilmis cevap yazilir.
 """
 
 import hashlib
@@ -35,18 +25,19 @@ LLM_CACHE_DDL = """
 
 
 def hash_prompt(model_name: str, prompt: str) -> str:
-    """Onbellek anahtari. Bu fonksiyonun ciktisi bir SOZLESMEDIR: degisirse
-    onbellekteki her satir erisilemez hale gelir, yani her cagri yeniden
-    odenir. `tests/test_core_contracts.py` altin bir hash ile kilitler."""
+    """Onbellek anahtari — SOZLESME, degisirse tum onbellek iskalar
+    (`tests/test_core_contracts.py` altin hash ile kilitler)."""
     signature = f"{model_name}\x1f{prompt}"
     return hashlib.sha256(signature.encode("utf-8")).hexdigest()[:32]
 
 
 def open_llm_cache_db(path: str | None = None) -> sqlite3.Connection:
+    """Onbellek dosyasini acar; `llm_cache` tablosunu garanti eder."""
     return db.connect(path or llm_cache_path(), ddl=LLM_CACHE_DDL)
 
 
 def get_cached(conn: sqlite3.Connection, prompt_hash: str) -> str | None:
+    """Bir hash icin kayitli cevabi doner; yoksa `None`."""
     row = conn.execute(
         "SELECT response FROM llm_cache WHERE prompt_hash = ?", (prompt_hash,)
     ).fetchone()
@@ -55,6 +46,7 @@ def get_cached(conn: sqlite3.Connection, prompt_hash: str) -> str | None:
 
 def store_cached(conn: sqlite3.Connection, prompt_hash: str, model_name: str,
                  prompt: str, response: str) -> None:
+    """Basariyla parse edilmis bir cevabi onbellege yazar (UPSERT)."""
     conn.execute(
         """
         INSERT INTO llm_cache (prompt_hash, model_name, prompt, response, created_at)
@@ -69,4 +61,5 @@ def store_cached(conn: sqlite3.Connection, prompt_hash: str, model_name: str,
 
 
 def count_rows(conn: sqlite3.Connection) -> int:
+    """Onbellekteki toplam satir sayisi."""
     return conn.execute("SELECT COUNT(*) FROM llm_cache").fetchone()[0]

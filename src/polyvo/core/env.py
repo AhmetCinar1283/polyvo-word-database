@@ -1,18 +1,9 @@
 """
 `.env` yukleyici + LLM saglayicilari icin katmanli gizli-anahtar/ayar cozumu.
 
-YER (2026-08-16 refactor): `.env` okuyucusu daha once sadece
-`src/stages/embedding/search.py` icindeydi ve yalnizca Cloudflare yolundan
-cagriliyordu. `src/core/llm/gemini.py` ise `os.environ`'u DOGRUDAN okuyordu,
-hicbir dotenv yukleyicisi cagirmadan — yani `.env` dosyasina sadece
-`GEMINI_API_KEY=...` eklemek yetmiyordu, degiskenin once kabukta export
-edilmis olmasi gerekiyordu (CLAUDE.md § Key design decisions, "does not work
-out of the box"). Bu modul o ayrimi kapatir: tum LLM saglayicilari artik ayni
-tek yukleyiciden geciyor.
-
-`search.py`'deki `_load_dotenv()` ile davranissal olarak AYNI: proje kokunde
-`.env` arar, `KEY=VALUE` satirlarini `os.environ.setdefault` ile yukler (zaten
-tanimli gercek ortam degiskenlerinin USTUNE YAZMAZ).
+Proje kokunde `.env` arar, `KEY=VALUE` satirlarini `setdefault` ile yukler
+(gercek ortam degiskeninin ustune YAZMAZ). Tum saglayicilar tek bu
+yukleyiciden gecer — biri `.env`'i, digeri `os.environ`'u okumaz.
 """
 
 from __future__ import annotations
@@ -25,11 +16,7 @@ _DOTENV_LOADED = False
 
 
 def load_dotenv() -> None:
-    """Proje kokundeki `.env` dosyasini bir kez okuyup `os.environ`'a yukler.
-
-    Tekrar cagrilirsa no-op (dosya bir kez okunur; ayni surec icinde birden
-    fazla saglayici ayni `.env`'i defalarca parse etmesin diye).
-    """
+    """`.env`'i bir kez okuyup `os.environ`'a yukler; tekrar cagri no-op."""
     global _DOTENV_LOADED
     if _DOTENV_LOADED:
         return
@@ -51,17 +38,8 @@ def load_dotenv() -> None:
 
 
 def resolve_secret(provider: str, native_keys: tuple[str, ...], explicit: str | None = None) -> str | None:
-    """Bir saglayicinin API anahtarini katmanli sirayla cozer:
-
-        1. `explicit`             — cagiran tarafin verdigi deger (--api-key bayragi)
-        2. `LLM_API_KEY_<PROVIDER>` — saglayici-ozel genel ad, orn. LLM_API_KEY_DEEPSEEK
-        3. `native_keys`          — saglayicinin kendi/eski adi, orn. GEMINI_API_KEY
-        4. `LLM_API_KEY`          — genel yedek
-
-    Adim 3 adim 4'ten ONCE gelir: ikisi de tanimliysa spesifik olan kazanir —
-    aksi halde birden fazla saglayici kullanan biri hangisinin devrede
-    oldugunu kestiremez.
-    """
+    """API anahtarini sirayla cozer: `explicit` > `LLM_API_KEY_<PROVIDER>` >
+    `native_keys` (orn. GEMINI_API_KEY) > genel `LLM_API_KEY` yedek."""
     load_dotenv()
 
     if explicit:

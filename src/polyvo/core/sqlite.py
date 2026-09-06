@@ -1,22 +1,11 @@
 """
 SQLite erisiminin TEK kapisi: pragma'lar, guvenli kopya, guvenli olcum.
 
-Uc kural burada merkezilesti; ucu de eski repoda ayri ayri kanamis seylerdir.
-
-1. `busy_timeout` SIFIR DEGIL (30 sn). SQLite'in yazma kilidi TABLO basina
-   degil DOSYA basinadir. Ayni dosyaya yazan iki komut paralel kostugunda
-   varsayilan 0 ile ikincisi BEKLEMEDEN `database is locked` ile olur
-   (olculdu: kilit 2 sn tutuldu -> 0 ms'de crash, 0 satir; 30 sn ile 2,1 sn
-   bekleyip yazdi). Pragma'lar tek yerde oldugu icin bu her dosya icin gecerli.
-
-2. KOPYALAMA `shutil.copy` DEGIL, backup API. Depolar WAL modunda calisir;
-   `-wal` yan dosyasi olmadan alinan ham kopya, commit edilmis ama henuz
-   checkpoint edilmemis satirlari DUSURUR — yani sessizce eksik bir yedek.
-
-3. OLCUM (`row_counts`) HER ZAMAN KORUMALI. `sqlite3.connect()` actigi dosyayi
-   dogrulamaz; bozuk ya da SQLite olmayan bir dosya sorunsuz "acilir", hata ilk
-   sorguda gelir. Korumasiz bir istatistik yardimcisi, saatler suren bir kosuyu
-   TUM IS BITTIKTEN SONRA dusurur.
+1. `busy_timeout` 30 sn — dosya kilidi paralel yazan iki komutta aninda
+   `database is locked` yerine bekler.
+2. Kopyalama `backup` API ile — WAL'daki commit edilmis ama checkpoint
+   edilmemis satirlari `shutil.copy` sessizce dusurur.
+3. `row_counts` hicbir zaman istisna firlatmaz — bozuk/eksik dosyada `None`.
 """
 
 from __future__ import annotations
@@ -28,6 +17,7 @@ BUSY_TIMEOUT_MS = 30_000
 
 
 def apply_pragmas(conn: sqlite3.Connection, *, foreign_keys: bool = True) -> None:
+    """WAL + busy_timeout + foreign_keys pragmalarini uygular."""
     cur = conn.cursor()
     if foreign_keys:
         cur.execute("PRAGMA foreign_keys = ON")
@@ -51,7 +41,7 @@ def connect(path: str, *, ddl: str | None = None, row_factory: bool = False,
 
 
 def backup_copy(src_path: str, dst_path: str) -> None:
-    """WAL-guvenli kopya (bkz. modul docstring'i, kural 2)."""
+    """WAL-guvenli kopya (backup API, shutil.copy degil)."""
     os.makedirs(os.path.dirname(os.path.abspath(dst_path)) or ".", exist_ok=True)
     src = sqlite3.connect(src_path)
     try:
@@ -65,8 +55,7 @@ def backup_copy(src_path: str, dst_path: str) -> None:
 
 
 def is_sqlite(path: str) -> bool:
-    """Dosyanin gercekten bir SQLite veritabani olup olmadigi — baglanmadan,
-    imzasina bakarak. `connect` bunu SOYLEMEZ (kural 3)."""
+    """Dosya gercekten SQLite mi -- baglanmadan, imzasina bakarak."""
     try:
         with open(path, "rb") as f:
             return f.read(16) == b"SQLite format 3\x00"
@@ -75,6 +64,7 @@ def is_sqlite(path: str) -> bool:
 
 
 def table_names(conn: sqlite3.Connection) -> list[str]:
+    """Dosyadaki kullanici tablolarinin adlari."""
     rows = conn.execute(
         "SELECT name FROM sqlite_master WHERE type='table' "
         "AND name NOT LIKE 'sqlite_%' ORDER BY name"
@@ -83,8 +73,7 @@ def table_names(conn: sqlite3.Connection) -> list[str]:
 
 
 def row_counts(path: str) -> dict[str, int] | None:
-    """Dosyadaki her tablonun satir sayisi. Dosya okunamaz/bozuksa `None`
-    doner — ASLA istisna firlatmaz (kural 3)."""
+    """Dosyadaki her tablonun satir sayisi; okunamazsa `None` (istisna firlatmaz)."""
     if not os.path.exists(path) or not is_sqlite(path):
         return None
     try:
@@ -107,8 +96,7 @@ def row_counts(path: str) -> dict[str, int] | None:
 
 
 def dir_row_counts(directory: str, suffixes: tuple[str, ...] = (".db", ".sqlite")) -> dict:
-    """Bir dizindeki (yalnizca kok seviyesindeki) veritabani dosyalarinin
-    tablo/satir dokumu — asama meta dosyalarinin `row_counts` alani icin."""
+    """Dizindeki (kok seviye) veritabani dosyalarinin tablo/satir dokumu."""
     out: dict[str, dict] = {}
     if not os.path.isdir(directory):
         return out

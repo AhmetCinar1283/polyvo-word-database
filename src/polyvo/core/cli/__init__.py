@@ -1,4 +1,4 @@
-"""CLI iskeleti: app sozlesmesi, kesif, ortak bayraklar, giris noktasi."""
+"""CLI iskeleti: app sozlesmesi, kesif, giris noktasi."""
 
 from polyvo.core.cli.app import App, Command, PanelPage
 

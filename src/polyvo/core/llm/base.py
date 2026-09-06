@@ -1,19 +1,10 @@
 """
-Saglayici-agnostik LLM soyutlamasi — Adapter (`LLMProvider` alt siniflari) +
-Template Method (`LLMProvider.complete_json`).
-
-Neden burada tek bir zarf: onceden cache-first mantigi (`hash_prompt` ->
-`get_cached` -> istek -> sadece parse edilebileni `store_cached`) `ollama.py`
-ve `gemini.py` icinde BIREBIR KOPYA olarak duruyordu — biri retry/pace-delay
-gibi bir davranisi degistirdiginde digeri sessizce ayrisiyordu. Artik bu zarf
-TEK yerde (`complete_json`); her saglayici sadece kendi HTTP istegini
+Saglayici-agnostik LLM soyutlamasi. `LLMProvider` cache-first zarfi
+(`complete_json`) TEK yerde tasir; alt siniflar sadece kendi HTTP istegini
 (`_request`) uygular.
 
-CACHE-KRITIK: `label_prefix` degeri `cache/llm_cache.sqlite` icindeki
-`prompt_hash`e giriyor (`sha256(label + prompt)`). Bu deger DEGISIRSE o
-saglayicinin TUM onbellegi iskalar (binlerce onceden odenmis LLM cagrisi
-yeniden odenir). Mevcut degerler dondurulmustur: Ollama "local:", Gemini
-"gemini:" — bkz. `src/core/llm/registry.py`.
+CACHE-KRITIK: `label_prefix` `prompt_hash`e girer (`sha256(label+prompt)`).
+Degisirse o saglayicinin TUM onbellegi iskalar — DOKUNMA.
 """
 
 from __future__ import annotations
@@ -30,27 +21,21 @@ __all__ = ["LLMProvider", "LLMResult", "LLMUnavailable"]
 
 
 class LLMUnavailable(RuntimeError):
-    """Saglayiciya erisilemiyor (servis kapali / API anahtari yok / kalici hata).
-
-    `retryable=True` ile yukseltilirse `complete_json` bunu gecici bir hata
-    (429/5xx) sayar ve exponential backoff ile yeniden dener; varsayilan
-    False (kalici hata — API anahtari yok, 4xx gibi — hemen yukari firlar).
-
-    `retry_after`: sunucunun `Retry-After` basligiyla soyledigi bekleme suresi
-    (saniye). Verildiginde exponential backoff'un YERINE gecer — 429'da tahmin
-    etmek yerine sunucunun soyledigi sureyi beklemek hem daha hizli toparlanir
-    hem de gereksiz bir istek daha atip limiti tazelemez."""
+    """Saglayiciya erisilemiyor. `retryable=True` -> gecici (429/5xx), backoff
+    ile yeniden denenir; varsayilan False -> kalici, hemen yukari firlar.
+    `retry_after` verilirse backoff yerine sunucunun soyledigi sure beklenir."""
 
     def __init__(self, message: str, *, retryable: bool = False,
                  retry_after: float | None = None):
+        """Hata mesaji + yeniden-denenebilirlik bayragini kaydeder."""
         super().__init__(message)
         self.retryable = retryable
         self.retry_after = retry_after
 
 
 class LLMResult(NamedTuple):
-    """`complete_json`'in HER ZAMAN dondurdugu 3'lu. `raw`, parse edilemeyen
-    denemelerin bile deneme gunlugune yazilabilmesi icin gerekli."""
+    """`complete_json`'in dondurdugu 3'lu. `raw` parse edilemese bile
+    deneme gunlugune yazilabilsin diye tutulur."""
 
     parsed: dict | None
     from_cache: bool
@@ -58,6 +43,7 @@ class LLMResult(NamedTuple):
 
 
 def _extract_json(raw_text: str) -> dict | None:
+    """Ham metinden ilk `{...}` blogunu ayiklar; parse edilemezse `None`."""
     match = re.search(r"\{.*\}", raw_text, re.DOTALL)
     if not match:
         return None
@@ -68,9 +54,8 @@ def _extract_json(raw_text: str) -> dict | None:
 
 
 class LLMProvider(ABC):
-    """Bir LLM saglayicisi icin ince adapter. Alt siniflar sadece `_request`i
-    ve (istege bagli) `preflight`/`list_models`i uygular; cache-first zarfi,
-    retry ve pace-delay burada, HEPSI icin ortak."""
+    """Bir LLM saglayicisi icin ince adapter; cache-first zarfi + retry burada,
+    alt siniflar sadece `_request`i uygular."""
 
     name: str = ""
     label_prefix: str = ""
@@ -78,10 +63,7 @@ class LLMProvider(ABC):
     env_keys: tuple[str, ...] = ()
     needs_api_key: bool = True
 
-    #: Interaktif saglayici menusunde isim yaninda gorunecek kisa not. Bos
-    #: birakilirsa `needs_api_key`ten turetilir (yerel / API anahtari gerekir).
-    #: Bu ikili ayrim her saglayiciyi anlatmaya yetmiyor: Colab ne "yerel"dir
-    #: (uzakta kosar) ne de API anahtari ister — kendini tarif edebilmeli.
+    #: Interaktif menude isim yaninda gorunecek kisa not (bos ise `needs_api_key`ten turetilir).
     menu_note: str = ""
 
     #: gecici hatalarda (429/5xx) kac kez daha denenecek. 0 = retry kapali.
@@ -89,6 +71,11 @@ class LLMProvider(ABC):
     retry_base_delay: float = 2.0
     #: Tek bir beklemenin ust siniri (saniye). `Retry-After` bunu asamaz.
     max_retry_delay: float = 60.0
+
+    #: Interaktif menude numarali secenek olarak sunulacak bilinen modeller
+    #: (canli liste CEKEMEYEN saglayicilar icin, orn. Cloudflare). Bos ise
+    #: `list_models` `None` doner, kullanici serbest metin girer.
+    known_models: tuple[str, ...] = ()
 
     def __init__(
         self,
@@ -99,6 +86,7 @@ class LLMProvider(ABC):
         max_retries: int | None = None,
         **options,
     ):
+        """Model/anahtar/retry ayarlarini kaydeder; kalani alt sinifa aittir."""
         self.model = model or self.default_model
         self.api_key = api_key
         self.base_url = base_url
@@ -107,21 +95,17 @@ class LLMProvider(ABC):
 
     @property
     def label(self) -> str:
-        """Cache anahtarina giren etiket, orn. 'local:qwen3:8b'. DOKUNMA —
-        degisirse bu saglayicinin tum onbellegi iskalar."""
+        """Cache anahtarina giren etiket, orn. 'local:qwen3:8b' — DOKUNMA."""
         return f"{self.label_prefix}{self.model}"
 
     def preflight(self) -> None:
-        """Koşuya girmeden ONCE saglayiciyi dogrula. Binlerce ogeye girip ilk
-        cagrida patlamak yerine hemen net bir mesajla dur. Varsayilan no-op;
-        erisim on-kontrolu olan saglayicilar (Ollama servis pingi, Gemini API
-        anahtari) override eder."""
+        """Kosuya girmeden once saglayiciyi dogrular; varsayilan no-op."""
         return None
 
     def list_models(self) -> list[str] | None:
-        """Interaktif model secici icin canli liste. Bilinmiyorsa/desteklenmiyorsa
-        None (cagiran taraf serbest-metin girisine duser)."""
-        return None
+        """Interaktif model secici icin canli liste; desteklenmiyorsa
+        `known_models`e duser, o da bossa None (serbest metin girisi)."""
+        return list(self.known_models) or None
 
     def complete_json(
         self,
@@ -132,15 +116,8 @@ class LLMProvider(ABC):
         temperature: float,
         pace_delay: float = 0.0,
     ) -> LLMResult:
-        """Cache-first JSON cagrisi. `hash_prompt(self.label, prompt)` cache
-        anahtarinin TEK uretim yeri budur — cagiran hicbir kod bu hash'i
-        kendisi hesaplamamali.
-
-        Sadece basariyla parse edilen cevaplar cache'e yazilir; parse hatasi
-        kalici "cevap" olarak saklanmaz. Gecici hatalarda (429/5xx) alt siniftan
-        gelen istisnalarda `self.max_retries` kadar exponential backoff ile
-        yeniden denenir (`_is_retryable` ile isaretlenmis istisnalar icin).
-        """
+        """Cache-first JSON cagrisi. Yalnizca parse edilebilen cevap cache'e
+        yazilir; gecici hatada `max_retries` kadar backoff ile yeniden dener."""
         prompt_hash = hash_prompt(self.label, prompt)
         cached_response = get_cached(cache_conn, prompt_hash)
         if cached_response is not None:
@@ -156,6 +133,7 @@ class LLMProvider(ABC):
         return LLMResult(parsed, False, raw_text)
 
     def _request_with_retry(self, prompt: str, *, max_tokens: int, temperature: float) -> str:
+        """`_request`i cagirir; gecici hatalarda exponential backoff ile yeniden dener."""
         attempt = 0
         while True:
             try:
@@ -163,12 +141,8 @@ class LLMProvider(ABC):
             except LLMUnavailable as exc:
                 if not exc.retryable or attempt >= self.max_retries:
                     raise
-                # Sunucu ne kadar bekleyecegimizi soylediyse ONA uyulur; aksi
-                # halde exponential backoff. `retry_after`i tavanlamak gerekiyor:
-                # bazi saglayicilar kota penceresinin SONUNU (dakikalar, hatta
-                # saatler) bildiriyor ve o sureyi oldugu gibi beklemek kosuyu
-                # asili birakirdi — o durumda hata yukari firlayip `--redo` ile
-                # devam etmek dogru davranis.
+                # Sunucunun soyledigi sure varsa ona uyulur (ama tavanlanir —
+                # kota penceresi saatler surebilir, o zaman hata yukari firlar).
                 delay = self.retry_base_delay * (2**attempt)
                 if exc.retry_after is not None:
                     delay = min(max(exc.retry_after, delay), self.max_retry_delay)
@@ -179,7 +153,5 @@ class LLMProvider(ABC):
 
     @abstractmethod
     def _request(self, prompt: str, *, max_tokens: int, temperature: float) -> str:
-        """Ham metin yaniti dondurur (henuz JSON parse edilmemis). Gecici bir
-        hata icin `LLMUnavailable(..., retryable=True)` yukselt; kalici bir
-        hata (API anahtari yok, 4xx) icin `retryable=False` (varsayilan)."""
+        """Ham metin yaniti dondurur. Gecici hatada `retryable=True` yukselt."""
         raise NotImplementedError

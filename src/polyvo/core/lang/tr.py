@@ -1,18 +1,11 @@
 """
-Turkce (L1) bicim kurallari.
+Turkce (L1) bicim kurallari — sozluk bicimi kapisi (`check_form`) + gevsek
+kok eslestirme (`stem_for_match`). Diger diller bu kurallardan etkilenmez;
+yeni dil eklerken bu dosya ornek alinir.
 
-`tr_gloss.py`'nin govdesinden buraya tasindi (2026-08-14). Icerik aynen
-korundu — sadece izole edildi, boylece diger diller bu kurallardan
-etkilenmez ve yeni bir dil eklerken burasi ornek alinir.
-
-BULGU (2026-08-14 dogruluk denetimi): 40 yuksek-guvenli ornegin elle
-incelenmesinde ~%12-15'inin sessizce yanlis oldugu tespit edildi
-(bathroom -> "tuvalet", forget -> "unut", plane -> "ucus" [dogrusu "ucak"],
-piano -> "zayif"). Bunlarin yaklasik yarisi FIIL MASTAR HATASIYDI: model
-"unutmak" yerine "unut" (emir kipi) donuyordu. `check_form`'un
-`verb_missing_infinitive` kontrolu bu yarisini yakalar. Kalan yari saf
-anlam hatasidir ve sezgisel bir kural ile yakalanamaz — onlar icin insan
-denetimi (`review.py`) tek guvenilir yoldur.
+BULGU: LLM TR karsiliklarinin ~%12-15'i sessizce yanlis; yarisi FIIL MASTAR
+HATASI (model "unutmak" yerine "unut" doner) — `check_form` bunu yakalar.
+Kalan yari saf anlam hatasi, yalnizca insan denetimiyle (`review.py`) yakalanir.
 """
 
 LANGUAGE_NAME = "Turkish"
@@ -44,10 +37,7 @@ REVIEW_RULES = (
 
 def check_form(part_of_speech: str, text: str) -> str | None:
     """Turkce sozluk bicimi kapisi. Sorun varsa kisa kod, yoksa None.
-
-    Cok kelimeli ifadelerde SON kelimeye bakilir ("akşam yemeği" -> "yemeği"),
-    cunku Turkce'de bas (head) sondadir.
-    """
+    Cok kelimeli ifadede SON kelimeye bakilir (Turkce'de bas sondadir)."""
     if not text:
         return None
 
@@ -70,67 +60,30 @@ def check_form(part_of_speech: str, text: str) -> str | None:
     return None
 
 
-# ===========================================================================
-# F6 (ceviri katmani) icin eklendi — 2026-08-15
-# ===========================================================================
-
-# Metnin gercekten Turkce oldugunu gosteren ucuz sinyaller. `text_qa.
-# ENGLISH_MARKERS`'in aynadaki karsiligi: modelin ceviri yapmayip Ingilizce
-# metni oldugu gibi geri vermesi ya da yanlis dile kaymasi bu kapiyla
-# yakalanir. Iki yol da yeterlidir — Turkce'ye ozgu harfler ya da yaygin
-# islev kelimeleri (kisa bir cumlede ozel harf hic gecmeyebilir:
-# "Bu bir test." gibi).
+# Metnin gercekten Turkce oldugunu gosteren ucuz sinyaller (ozgu harfler ya
+# da yaygin islev kelimeleri) — model cevirmeyip Ingilizce'yi aynen geri
+# donerse bu kapiyla yakalanir.
 import re as _re  # noqa: E402  (modul sonunda, ustteki saf-veri blogunu bozmamak icin)
 
-# IKI TUZAK VAR, IKISI DE OLCULEREK BULUNDU (2026-08-15):
-#
-# 1) `re.IGNORECASE` BU DESENDE KULLANILAMAZ. Python'da 'ı'.upper() == 'I'
-#    ve 'İ'.lower() == 'i' oldugu icin, IGNORECASE altinda `ı` ASCII `i` ile
-#    ESLESIR — yani icinde 'i' gecen HER Ingilizce cumle "Turkce" gorunurdu
-#    ("The dog ran fast in the garden" yanlislikla gecti). Bu yuzden ozel
-#    harf sinifi BUYUK/KUCUK duyarlidir (iki hali de acikca listelenir),
-#    kelime listesi ise `(?i:...)` ile yerel olarak duyarsizlastirilir.
-#
-# 2) Kelime listesinde INGILIZCE ile CAKISAN kelime/harf olamaz:
-#    - "her" CIKARILDI — Ingilizce'de son derece yaygin ("her friend").
-#    - Buyuk `I` CIKARILDI — Turkce'nin noktasiz buyuk I'si ASCII 'I' ile
-#      AYNI kod noktasidir, yani Ingilizce "I think..." her seferinde
-#      Turkce sayilirdi. Kucuk `ı` ve buyuk `İ` ayirt edici oldugu icin kaldi.
-#    Ayrica diyakritiksiz yazilmis Turkce icin birkac ASCII yedek kelime
-#    eklendi (hicbiri Ingilizce kelime degil).
+# `re.IGNORECASE` bu desende KULLANILMAZ: Python'da 'ı'.upper()=='I' oldugu
+# icin IGNORECASE altinda 'ı' ASCII 'i' ile eslesip her "i" gecen Ingilizce
+# cumleyi Turkce sanardi. Kelime listesinde de Ingilizce'yle cakisan
+# "her"/buyuk "I" YOK — ikisi de gercek Ingilizce'de sik gecer.
 LANG_MARKERS = _re.compile(
     r"[çğıöşüÇĞİÖŞÜ]"
     r"|(?i:\b(bir|ve|bu|şu|için|ile|olarak|daha|çok|ama|gibi|kadar|"
     r"sonra|önce|olan|değil|yok|mi|mı|degil|icin|cok)\b)"
 )
 
-# ---------------------------------------------------------------------------
-# TERIM TUTARLILIGI KAPISI — dil yetenegi bildirimi (2026-08-22)
-# ---------------------------------------------------------------------------
-# F6'nin terim kapisi (`translation_sync.gloss_appears_in`) SADECE bu bayragi
-# acikca `True` yapan dillerde calisir. Sessiz varsayilan `False`dir.
-#
-# NEDEN: kapinin altindaki karsilastirma (bkz. `text_qa.loose_same_word`)
-# "kok BASTA kalir, ekler SONA gelir" varsayimina dayanir. Turkce icin bu
-# dogru. Almanca'nin `ge-` on ekli sifat-fiili (gehen -> gegangen) ya da
-# Rusca'nin on ekli fiilleri icin DEGIL — orada kapi her cumleyi
-# "terim gecmiyor" diye isaretler ve `quality='low'` sayisi anlamsizlasir.
-# Yeni bir L1 eklerken bu bayragi acmadan once o dilde OLCUM yapilmalidir:
-# elle siniflandirilmis >=100 ornek uzerinde yanlis alarm orani.
+# Terim tutarliligi kapisi SADECE bu bayragi acan dillerde calisir: altindaki
+# karsilastirma "kok BASTA kalir, ekler SONA gelir" varsayar — Turkce'de
+# dogru, on-ekli dillerde (Almanca, Rusca) degil. Yeni L1 eklerken once olcum yap.
 TERM_MATCH_SUPPORTED = True
 
-# Kok eslestirme icin soyulacak ekler — en uzun eslesen BIR kez soyulur.
-# Tam morfolojik cozumleme DEGILDIR ve olmasi da gerekmiyor: buradaki tek is,
-# "araba" glossu ile cumledeki "arabayla"nin ayni sozcuk oldugunu gorup
-# TERIM TUTARLILIGI kapisini yanlis yere tetiklememek.
-#
-# HATA YONU BILINCLI SECILDI: kapi "bulunamadi" dediginde satiri SUPHELI
-# isaretliyor. Yani fazla soymak (yanlis alarm) kabul EDILEMEZ, az soymak
-# (kacirmak) kabul edilebilir. Bu yuzden:
-#   - TEK HARFLI ekler (-ı/-i/-a/-e ...) listede YOK: "araba" -> "arab",
-#     "evde" -> "evd" gibi kok bozulmalari uretiyorlardi (olculdu, 2026-08-15).
-#   - Karsilastirma tam esitlik degil ONEK iliskisidir (bkz. asagidaki
-#     docstring), boylece soyulamayan ekler yine de eslesir.
+# Kok eslestirme icin soyulacak ekler (en uzun eslesen BIR kez soyulur) —
+# tam morfoloji DEGIL, sadece "araba"/"arabayla" ayni sozcuk mu sorusu.
+# TEK HARFLI ekler BILEREK yok: "araba"->"arab" gibi kok bozan asiri-soyma
+# yanlis alarm uretir, az soymak (kacirmak) tercih edilir.
 _MATCH_SUFFIXES = (
     "larından", "lerinden", "larıyla", "leriyle", "larında", "lerinde",
     "sının", "sinin", "sunun", "sünün",
@@ -167,20 +120,9 @@ _MIN_STEM_LEN = 3
 
 
 def stem_for_match(word: str) -> str:
-    """Gevsek Turkce kok — SADECE metin ici arama karsilastirmasi icin.
-
-    `check_form` sozluk BICIMINI denetler; bu fonksiyon ise iki yuzey bicimin
-    ayni sozcuge ait olup olmadigini kabaca sorar. Fiil mastari (-mek/-mak)
-    atilir, sonra listedeki en uzun ek BIR kez soyulur. Kok `_MIN_STEM_LEN`'in
-    altina duserse soyma geri alinir.
-
-    Cagiran taraf sonucu TAM ESITLIKLE degil, IKI YONLU ONEK iliskisiyle
-    karsilastirmalidir: `a.startswith(b) or b.startswith(a)`. Ornekler
-    (olculdu 2026-08-15):
-        araba / arabayla -> "araba" / "araba"   (esit)
-        ev    / evde     -> "ev"    / "evde"    (onek)
-        su    / sular    -> "su"    / "sular"   (onek)
-    """
+    """Gevsek Turkce kok — SADECE metin ici arama karsilastirmasi icin (iki
+    yuzey bicim ayni sozcuk mu). Cagiran taraf IKI YONLU ONEK iliskisiyle
+    karsilastirmali: `a.startswith(b) or b.startswith(a)`."""
     w = (word or "").strip().lower()
     if not w:
         return ""

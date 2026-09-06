@@ -1,25 +1,11 @@
 """
-`polyvo.toml` — projenin TEK calisma-zamani konfigurasyonu.
+`polyvo.toml` — TEK calisma-zamani konfigurasyonu: yol semasi, aktif tag,
+diller, evren hedefi, varsayilan saglayici.
 
-Eski repoda ayni bilgi bes ayri yere dagilmisti: `.active_tag` dosyasi,
-`workspace/<tag>/<l2>/source_config.json`, sekiz dosyada hardcode edilmis
-`5000`, kod icinde sabit dizin adlari ve `.env`. Sonuc: "aktif tag ne" ya da
-"evren kac kelime" sorusunun cevabi nereye bakildigina gore degisiyordu.
-
-BU DOSYADA OLAN: yol semasi, aktif veri basligi, diller, evren hedefi,
-varsayilan saglayici — yani KARARLAR.
-BU DOSYADA OLMAYAN, ve bilerek:
-  * gizli anahtarlar -> `.env` (repoya girmez; `core/env.py` okur)
-  * model kalite siralamasi -> `model_quality.json` (kendi basina bir karar
-    dosyasi; elle duzenlenir, repoya girer, `rank_for` onu okur)
-  * bir build'in KANONIK KILIDI -> `data/workspace/<tag>/<l2>/source_config.json`
-    (bu bir konfig degil, bir OLCUM sonucudur: hangi build dosyalari hangi
-    satir sayilariyla kilitlendi. Konfige tasinamaz.)
-
-YAZILABILIR TEK ALAN `project.active_tag`'dir (`write_active_tag`). Tek bir
-skaler satir yerinde degistirilir; dosyanin geri kalanina, yorumlarina ve
-siralamasina dokunulmaz — konfig insanin duzenledigi bir dosyadir, makinenin
-yeniden serilestirdigi bir cikti degil.
+BURADA OLMAYAN (bilerek): gizli anahtarlar (`.env`, `core/env.py` okur),
+model kalite siralamasi (`model_quality.json`), build kilidi
+(`source_config.json` — bir OLCUM sonucu, konfig degil).
+Yazilabilir tek alan: `project.active_tag` (`write_active_tag`).
 """
 
 from __future__ import annotations
@@ -40,9 +26,8 @@ DEFAULTS: dict = {
 
 
 def project_root() -> str:
-    """Depo koku. Once `POLYVO_ROOT`, sonra bu dosyadan yukari dogru
-    `polyvo.toml` aranir — cwd'ye GUVENILMEZ, cunku komutlar alt dizinlerden
-    de calistirilir (eski repo `os.chdir` ile bunu maskeliyordu)."""
+    """Depo koku: once `POLYVO_ROOT`, sonra yukari dogru `polyvo.toml` aranir
+    (cwd'ye guvenilmez — komutlar alt dizinlerden de calisir)."""
     env = os.environ.get("POLYVO_ROOT")
     if env:
         return os.path.abspath(env)
@@ -60,10 +45,12 @@ def project_root() -> str:
 
 
 def config_path() -> str:
+    """`polyvo.toml` tam yolu."""
     return os.path.join(project_root(), CONFIG_FILENAME)
 
 
 def _merge(base: dict, override: dict) -> dict:
+    """Iki sozlugu tek seviye birlestirir (override kazanir)."""
     out = {k: (dict(v) if isinstance(v, dict) else v) for k, v in base.items()}
     for key, value in override.items():
         if isinstance(value, dict) and isinstance(out.get(key), dict):
@@ -75,6 +62,7 @@ def _merge(base: dict, override: dict) -> dict:
 
 @lru_cache(maxsize=1)
 def load() -> dict:
+    """Konfigi diskten okur ve varsayilanlarla birlestirir; surec ici cache'lenir."""
     path = config_path()
     if not os.path.exists(path):
         return _merge(DEFAULTS, {})
@@ -83,45 +71,52 @@ def load() -> dict:
 
 
 def reload() -> dict:
+    """Cache'i bosaltip konfigi yeniden okur (testler icin)."""
     load.cache_clear()
     return load()
 
 
 def get(section: str, key: str, default=None):
+    """Bir bolum/anahtar degerini okur; yoksa `default` doner."""
     return load().get(section, {}).get(key, default)
 
 
 # ── Sik kullanilan alanlar ────────────────────────────────────────────────
 
 def default_l2() -> str:
+    """Varsayilan hedef dil (L2)."""
     return str(get("project", "l2", "en"))
 
 
 def default_l1_list() -> list[str]:
+    """Yapilandirilmis tum ana dil (L1) kodlari."""
     value = get("project", "l1", ["tr"])
     return [value] if isinstance(value, str) else list(value)
 
 
 def default_l1() -> str:
+    """Ilk (birincil) L1 kodu."""
     langs = default_l1_list()
     return langs[0] if langs else "tr"
 
 
 def universe_target_size() -> int:
+    """Hedeflenen kelime evreni buyuklugu."""
     return int(get("universe", "target_size", 5000))
 
 
 def default_provider() -> str:
+    """Varsayilan LLM saglayicisinin adi."""
     return str(get("llm", "default_provider", "ollama"))
 
 
 def configured_tag() -> str:
+    """`polyvo.toml`'da yazili aktif tag; yoksa bos string."""
     return str(get("project", "active_tag", "") or "")
 
 
 def write_active_tag(tag: str) -> None:
-    """`project.active_tag`'i yerinde gunceller. Anahtar yoksa `[project]`
-    blogunun basina eklenir; blok da yoksa dosyanin sonuna eklenir."""
+    """`project.active_tag`'i yerinde gunceller (blok yoksa olusturur)."""
     path = config_path()
     if not os.path.exists(path):
         with open(path, "w", encoding="utf-8") as f:
