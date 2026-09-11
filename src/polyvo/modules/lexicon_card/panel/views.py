@@ -112,11 +112,29 @@ def _detail_page(query: dict) -> tuple[int, str]:
     examples = "".join(
         f"<li>{_e(text)} {_badge(tier, source)}</li>"
         for _seq, text, tier, source in card["examples"]) or "<li>—</li>"
+    gloss_notes = card["gloss_notes_l1"]
     glosses = "".join(
         f"<tr><td>{_e(l1)}</td><td>{_e(gloss)}</td>"
+        f"<td>{_e(gloss_notes.get(l1)) or '—'}</td>"
         f"<td>{_badge(tier, source)}</td></tr>"
         for l1, gloss, tier, source in card["glosses_l1"]) or (
-        '<tr><td colspan="3" class="muted">—</td></tr>')
+        '<tr><td colspan="4" class="muted">—</td></tr>')
+
+    translation_blocks = []
+    for tr in card["translations"]:
+        if tr["status"] != "approved":
+            translation_blocks.append(
+                f'<h4>{_e(tr["l1"])} <span class="muted">'
+                f'(reddedildi: {_e(tr["reject_reason"])})</span></h4>')
+            continue
+        tr_examples = "".join(f"<li>{_e(ex)}</li>" for ex in tr["examples"]) or "<li>—</li>"
+        translation_blocks.append(
+            f'<h4>{_e(tr["l1"])} {_badge(tr["tier"], tr["source"])}</h4>'
+            f'<table><tr><th>tanim</th><td>{_e(tr["definition"]) or "—"}</td></tr>'
+            f'<tr><th>kullanim notu</th><td>{_e(tr["usage_note"]) or "—"}</td></tr>'
+            '</table>'
+            f'<ul>{tr_examples}</ul>')
+    translations_html = "".join(translation_blocks) or '<p class="muted">—</p>'
     level = card["level"]
     level_text = (f'{_e(level[0])} · sira {_e(level[1])} '
                   f'<span class="muted">({_e(level[2])})</span>') if level else "—"
@@ -143,7 +161,8 @@ def _detail_page(query: dict) -> tuple[int, str]:
         f'<table>{table}</table>'
         f'<h3>Ornekler</h3><ul>{examples}</ul>'
         f'<h3>L1 karsiliklari</h3><table><tr><th>dil</th><th>karsilik</th>'
-        f'<th>kaynak</th></tr>{glosses}</table>'
+        f'<th>not</th><th>kaynak</th></tr>{glosses}</table>'
+        f'<h3>Ceviriler (tanim + not + ornek)</h3>{translations_html}'
         '<p><a href="/lexicon-card">← listeye don</a></p>')
 
 

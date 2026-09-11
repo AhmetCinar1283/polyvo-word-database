@@ -34,19 +34,20 @@ def _is_cached(cache_conn: sqlite3.Connection | None, label: str,
 
 def make_plan(job: Job, units: Iterable[Unit], existing: dict[str, Existing],
               *, model_label: str, model_rank: int, mode: str = "none",
+              force: str | None = None,
               cache_conn: sqlite3.Connection | None = None) -> PlanReport:
     """Birimleri gezip verdikt + onbellek durumuyla plan raporunu uretir."""
     report = PlanReport(command=job.command or f"{job.family}.{job.kind}",
-                        model_label=model_label, mode=mode,
+                        model_label=model_label, mode=mode, force=force,
                         max_attempts=job.max_attempts)
 
     for unit in units:
         row = existing.get(unit.key)
-        decision = vd.decide(row, mode=mode, model_rank=model_rank)
+        decision = vd.decide(row, mode=mode, model_rank=model_rank, force=force)
         if decision == vd.PROCESS:
             report.add(PlanEntry(
                 key=unit.key, name=unit.name, verdict=decision,
-                reason=vd.process_reason(row),
+                reason=vd.process_reason(row, model_rank=model_rank, force=force),
                 cached=_is_cached(cache_conn, model_label, job.build_prompt(unit)),
             ))
         else:

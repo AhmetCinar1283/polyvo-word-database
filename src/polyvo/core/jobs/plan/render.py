@@ -29,9 +29,10 @@ def _samples_suffix(names: list[str]) -> str:
 def format_plan(report: PlanReport) -> list[str]:
     """Plan raporunu satir listesine cevirir — basmaz, yalnizca bicimler."""
     tag = f"[{report.command}]"
+    force_suffix = f", --force {report.force}" if report.force else ""
     lines = [
-        f"{tag} PLAN — model {report.model_label}, --redo {report.mode}, "
-        f"{report.examined:,} birim incelendi",
+        f"{tag} PLAN — model {report.model_label}, --redo {report.mode}"
+        f"{force_suffix}, {report.examined:,} birim incelendi",
     ]
 
     for reason, count in sorted(report.process_reasons().items()):

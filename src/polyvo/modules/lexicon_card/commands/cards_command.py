@@ -1,6 +1,9 @@
 """
 `polyvo lexicon-card cards` — kart uretim kosusunu baslatir.
 
+Kart DILE BAGLI DEGILDIR: bu komut yalnizca Ingilizce uretir, `--l1` almaz.
+Ana dil karsiligi ayri bir kosudur: `polyvo lexicon-card gloss --l1 <kod>`.
+
 Bu dosya IS YAPMAZ: bayraklari cozer, is/saglayici/depo uclusunu kurar,
 `core/jobs/engine/run.py`'a verir. Plan, onay, butce, deneme gunlugu ve
 yazma kapisi motorun isidir — burada tekrarlanmaz.
@@ -34,8 +37,6 @@ def add_cards_args(parser: argparse.ArgumentParser) -> None:
                         help="Veri basligi (yoksa polyvo.toml/ortam/tek aday)")
     parser.add_argument("--l2", default=None,
                         help="Hedef dil (varsayilan: polyvo.toml project.l2)")
-    parser.add_argument("--l1", default=None,
-                        help="Ana dil, gloss bu dilde uretilir (varsayilan: polyvo.toml project.l1)")
     parser.add_argument("--limit", type=int, default=None, metavar="N",
                         help="Evrenin ilk N kelimesiyle sinirla (pilot icin)")
     cli_args.add_job_args(parser)
@@ -48,7 +49,6 @@ def cmd_cards(args: argparse.Namespace) -> int:
     ctx = JobContext(
         tag=paths.resolve_tag(args.tag),
         l2=args.l2 or config.default_l2(),
-        l1=args.l1 or config.default_l1(),
         limit=args.limit,
     )
     provider = llm_cli.resolve_llm_settings(

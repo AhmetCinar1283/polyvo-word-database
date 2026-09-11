@@ -18,7 +18,7 @@ active_tag = ""
 l2 = "en"
 
 # Ana diller. Yeni bir dil eklemek satir ve dosya ekler, SEMA DEGISTIRMEZ.
-l1 = ["tr"]
+l1 = ["tr", "es", "pt-BR", "de"]
 
 [paths]
 # Tum veri buranin altinda. Mutlak yol da verilebilir (baska bir diske almak

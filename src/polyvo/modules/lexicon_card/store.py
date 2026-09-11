@@ -1,7 +1,10 @@
 """
-`lexicon.sqlite` deposu — kartin BUTUN parcalari (EN kart + L1 gloss + ornek
-+ tohum) TEK transaction'da yazilir; motor `commit()` cagirana kadar hicbiri
+`lexicon.sqlite` deposu — kartin BUTUN parcalari (EN kart + ornek + tohum)
+TEK transaction'da yazilir; motor `commit()` cagirana kadar hicbiri
 kalicilasmaz. Yarim kart diye bir sey olamaz.
+
+`sense_gloss_l1`e BURADAN yazilmaz (tek yazicisi `translate/store.py`).
+Kart dile bagli degildir.
 
 Kapiyi bu sinif CAGIRMAZ: `ArtifactStore.save` cagirir, buradaki `_write_row`
 yalnizca kapidan GECMIS satiri yazar (`core/jobs/store/base.py`).
@@ -49,32 +52,28 @@ class LexiconCardStore(ArtifactStore):
         sense_id = unit.data["sense_id"]
         payload = request.payload
 
+        # `usage_note` sutunu semada KALIR ama BURADAN artik hep NULL yazilir
+        # (Is 3): payload'da bu alan yok, tek ureticisi `note/store.py`dir.
         self.conn.execute(
             "INSERT OR REPLACE INTO sense_cards (sense_id, item_id, stable_key,"
             " gloss_en, register, usage_note, tier, status, reject_reason,"
             " source, model, prompt_hash, updated_at)"
-            " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,CURRENT_TIMESTAMP)",
+            " VALUES (?,?,?,?,?,NULL,?,?,?,?,?,?,CURRENT_TIMESTAMP)",
             (sense_id, item_id, unit.key, payload.get("gloss_en"),
-             payload.get("register"), payload.get("usage_note"),
+             payload.get("register"),
              request.tier, request.status, request.reject_reason,
              SOURCE_MODEL, request.model_label, request.prompt_version))
 
         # Reddedilen cevabin ICERIGI yazilmaz — satir yalnizca "burasi kotu"
         # demek icin durur, redo matrisi onu boyle tanir.
         if request.status == "approved":
-            self._write_content(ctx, request)
+            self._write_examples(request)
         self._write_seed(unit, payload)
 
-    def _write_content(self, ctx: JobContext, request: WriteRequest) -> None:
-        """Onaylanmis karta ait L1 gloss ve ornek cumleleri yazar."""
+    def _write_examples(self, request: WriteRequest) -> None:
+        """Onaylanmis karta ait ornek cumleleri yazar."""
         sense_id = request.unit.data["sense_id"]
         payload = request.payload
-        if ctx.l1 and payload.get("gloss_l1"):
-            self.conn.execute(
-                "INSERT OR REPLACE INTO sense_gloss_l1 (sense_id, l1, gloss,"
-                " tier, source, model) VALUES (?,?,?,?,?,?)",
-                (sense_id, ctx.l1, payload["gloss_l1"], request.tier,
-                 SOURCE_MODEL, request.model_label))
 
         # Ornekler once SILINIR: eski kosunun 3. ornegi yeni kosunun 2
         # orneginin yaninda oksuz kalmasin.

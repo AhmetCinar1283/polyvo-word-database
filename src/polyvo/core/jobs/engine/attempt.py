@@ -7,6 +7,11 @@ BIR BIRIM YARIM ISLENMEZ — butce kontrolu birime girmeden ONCE yapilir
 Reddedilen deneme de gunluge yazilir (onbellek yalnizca parse edilebileni
 saklar). Red sebebi bir sonraki denemenin prompt'una `retry_note` olarak
 eklenir — farkli onbellek anahtarina duser, gercekten yeni cevap gelebilir.
+
+`bypass_cache` bu birimin `--force` ile zorlandigini soyler: onbellek OKUMASI
+atlanir. Zorlanan birimin onbellekteki cevabini onay oncesi asama zaten
+tuketmistir (`revalidate.py`); buraya gelmis olmasi "o cevap bugunku QA'dan
+da gecmedi" demektir, yani ayni cevabi bir daha okumanin bir anlami yoktur.
 """
 
 from __future__ import annotations
@@ -32,7 +37,8 @@ class AttemptOutcome:
 
 def run_attempts(job: Job, ctx: JobContext, unit: Unit, *, provider,
                  cache_conn, attempts_conn, run_id: str,
-                 pace_delay: float = 0.0) -> AttemptOutcome:
+                 pace_delay: float = 0.0,
+                 bypass_cache: bool = False) -> AttemptOutcome:
     """Birimi en fazla `job.max_attempts` kez dener; ilk onayda durur."""
     outcome = AttemptOutcome(reason="hic deneme yapilmadi")
     retry_note: str | None = None
@@ -42,6 +48,7 @@ def run_attempts(job: Job, ctx: JobContext, unit: Unit, *, provider,
         parsed, from_cache, raw = provider.complete_json(
             prompt, cache_conn, max_tokens=job.max_tokens,
             temperature=job.temperature, pace_delay=pace_delay,
+            bypass_cache=bypass_cache,
         )
         if from_cache:
             outcome.cached_calls += 1
@@ -55,7 +62,11 @@ def run_attempts(job: Job, ctx: JobContext, unit: Unit, *, provider,
 
         attempt_log.record(
             attempts_conn, run_id=run_id, family=job.family, kind=job.kind,
-            l2=ctx.l2, l1=ctx.l1, variant=ctx.variant, stable_key=unit.key,
+            l2=ctx.l2, l1=ctx.l1, variant=ctx.variant,
+            # unit.key bilesikse (keys.with_variant) ham stable_key data'da
+            # saklanir — gunluk depoyla ayni anlami tasisin diye ham deger
+            # yazilir, bilesik anahtar degil.
+            stable_key=unit.data.get("stable_key", unit.key),
             model_label=provider.label, prompt_version=job.prompt_version,
             attempt=attempt, from_cache=from_cache, status=status,
             reject_reason=qa.reason, raw_response=raw,

@@ -357,6 +357,10 @@ Yürütme sırası: **1 → 3 → 2 → 4 → 5 → 6 → 7** (bkz. §7 sıra d�
       ← pilot koşusu kullanıcıda, bkz. §9.4
 - [x] Adım 6 — delivery  (2026-09-06, 143 test yeşil; 291 öğelik pilot sevkiyat, `verify` 16/16)
 - [x] Adım 7 — review + panel  (2026-09-06, 178 test yeşil; insan yolu gerçek depo kopyasında uçtan uca koştu, panel gerçek depoyu servis etti)
+- [x] v2 İş 1 — varyant ekseni  (2026-09-06, 186 test yeşil)
+- [x] v2 İş 2 — çok dilli L1 (`gloss`)  (2026-09-06, 220 test yeşil; `es` pilotu 50 birim koştu)
+- [x] v2 İş 2b — dil simetrisi (`cards` L1 üretmeyi bıraktı)  (2026-09-06, 235 test yeşil)
+- [x] v2 İş 3 — çeviri katmanı (`note`+`translate`)  **kod hazır, gerçek koşu kullanıcıda** (2026-09-06, 274 test yeşil), bkz. §9.11
 
 ### 9.0 Adım adım ne çıkar, ne kadara
 
@@ -679,3 +683,551 @@ sayfasında **291 approved · 9 rejected** özetini ve kart ayrıntısını
 
 **v1 tamamlandı.** Ertelenenler (v2): `modules/cloze`, `modules/paragraph`,
 `modules/reading`, `curriculum/sets`, embedding katmanı, panelden düzeltme.
+
+## v2
+
+### 9.7 İş 1 ölçümü (2026-09-06) — `variant` ekseni
+
+**Tek üretim yeri `core/jobs/keys.py`** (`compose_key`, `with_variant`).
+Motorun kendisi (`plan/planner.py`, `engine/loop.py`, `store/policy.py::
+should_write`, `plan/verdict.py::decide`, `lexicon_card/store.py`,
+`curriculum/`) **hiç değişmedi** — diff'te görünmüyor, planlanan uyarı
+("motor büyük ihtimalle hiç değişmeyecek") doğru çıktı. Boş varyantta
+`compose_key(x, "")` bit bit `x`in kendisi — geriye dönük uyum migration
+gerektirmeden korundu.
+
+Değişen iki dosya: `lexicon_card/job.py::load_units` (varyant uygulanır,
+`ctx.variant` hiç dolmadığı için bugün no-op) ve `engine/attempt.py`
+(deneme günlüğüne artık ham `stable_key` gidiyor, `unit.data['stable_key']`
+üzerinden — bileşik anahtar deneme günlüğünün anlamını bozmasın diye).
+
+**Ölçüm:** 178 eski test **tek satır değişmeden** yeşil + 8 yeni test
+(`tests/test_jobs_keys.py`) = 186 test. `polyvo lexicon-card cards --tag v7
+--limit 1000 --dry-run --no-interactive` çıktısı işten önce/sonra **birebir
+aynı** (byte-diff).
+
+### 9.8 İş 2 ölçümü (2026-09-06) — çok dilli L1 (`es`/`pt-BR`/`de`)
+
+**Yeni `kind`: `polyvo lexicon-card gloss --l1 <kod>`.** Aynı app, ikinci
+`kind` (`family="lexicon"`, `kind="gloss_l1"`); motor (`core/jobs/`)
+**değişmedi**. Klasör `modules/lexicon_card/gloss/` (`units·prompt·qa·
+store·job.py`) + `commands/gloss_command.py` (`cards_command.py`nin ikizi,
+`DEFAULT_PROVIDER`/`DEFAULT_MODEL`'i ondan import eder — pilot model
+sabitliği tek yerde kalsın diye).
+
+**Anahtar:** `JobContext.variant = l1`; `keys.with_variant` kartın ham
+`stable_key`ini `stable_key::<l1>` yapar. Kart (`sense_cards`,
+`sense_examples`, `item_phonetics`) **hiç yazılmaz** — yalnızca
+`sense_gloss_l1` + kardeş durum tablosu `sense_gloss_l1_state` (yeni, `l1`
+sütunlu TEK tablo — dil başına ayrı tablo YOK, `polyvo.toml`'un "yeni dil
+şema değiştirmez" sözü korunur).
+
+**`sense_gloss_l1_state` neden var:** `sense_gloss_l1`'in şeması kilitli
+(`status` sütunu yok) ama redo matrisi "kötü satır"ı tanımak zorunda. Karar:
+gerçek gloss varsa (`sense_gloss_l1`) o HER ZAMAN kazanır — bu sayede
+`review import`la yazılan insan satırı (tier 0) otomatik korunur; durum
+tablosu yalnızca gloss YOKKEN "denendi ve reddedildi" der.
+
+**Bağlam sözleşmesi — bu işin en büyük kalite riski:** prompt (`gloss/
+prompt.py`) ödenmiş kartın `gloss_en`/`register`/`usage_note`/örneklerini
+BAĞLAM olarak taşır; model kelimeyi değil o ANLAMI çevirir. Testle çivilendi
+(`test_prompt_kartin_anlamini_baglam_olarak_tasir`).
+
+**`pt-BR` tuzağı kapatıldı:** `core/lang/__init__.py::get_rules` modül adını
+normalize eder (`pt-BR` → `pt_br`), önbellek anahtarı ham kod kalır. Ayrıca
+sessiz düşüş artık YALNIZCA aranan modülün kendisi yoksa olur —
+`exc.name != hedef modül` ise hata yeniden fırlatılır (gerçekten bozuk bir
+dil modülü artık sessizce kuralsıza düşmez). Yeni kural modülleri: `es.py`,
+`pt_br.py`, `de.py` — her biri en az bir gerçek `check_form` kontrolü
+taşır (fiil mastarı `-ar/-er/-ir`/`-ar/-er/-ir/-or`/`-en/-n`; `de` ayrıca
+isim büyük harf kontrolü). `core/paths.py::LANGUAGE_NAMES`'e `pt-BR`
+eklendi; `polyvo.toml`'a `l1 = ["tr", "es", "pt-BR", "de"]`.
+
+**`tr` — plan bunu istemiyordu, kullanıcı sonradan ekletti.** `tr.py` zaten
+vardı (v1'den), yeni bir dosya gerekmedi; `gloss` işi baştan dil-agnostik
+tasarlandığı için `--l1 tr` **aynı koddan** geçiyor — ikinci bir yol açılmadı.
+`tests/test_lang_rules.py`'nin parametrize listelerine `tr` eklendi (fiil
+mastarı `-mek/-mak`, `LANG_MARKERS`); `test_lexicon_gloss.py`'ye kartın
+BAŞKA bir dille (`es`) üretildiği, `tr` karşılığının hâlâ eksik olduğu bir
+senaryo eklendi — `gloss --l1 tr` o boşluğu **aynı QA'yla** dolduruyor,
+ikinci koşuda `paid_calls = 0`.
+
+**Ölçüm (gerçek `data/` üzerinde, sıfır LLM çağrısı, `--dry-run`):**
+gerçek `v7` deposunda `sense_cards` **957 approved / 43 rejected**
+(291 rakamı DURUM.md'nin ilk küçük pilotundan kalma; depo o zamandan beri
+büyüdü). `cards --tag v7 --limit 1000 --dry-run --no-interactive` işten
+önce/sonra **byte-bybyte aynı**. `gloss --tag v7 --l1 es --dry-run
+--no-interactive` → **957 işlenecek, 0 dış çağrı**; `--limit 50` → **50
+işlenecek**. `cards --tag v7 --l1 tr --limit 1000 --dry-run` → **0 ödenecek
+çağrı** (TR karta zarar verilmedi).
+
+**Testler:** `tests/test_lexicon_gloss.py` (20, ikisi `tr` senaryosu) +
+`tests/test_lang_rules.py` (12, `tr` dahil) + `tests/test_review.py`'ye
+eklenen 2 (`--l1 es` gidiş-dönüşü + panel çoklu dil listesi) = 34 yeni test.
+Toplam **220 test yeşil** (186 + 34), `test_layering` dahil; AST docstring
+denetimi 0 eksik.
+
+**Kapsam dışı bırakıldı (kullanıcı kararı, bu oturumda):** cümle çeşitliliği
+("I eat cake" tekdüzeliği) — İş 2 cümle üretmez, yalnızca gloss çevirir;
+ayrı bir görev tanımı olarak İş 4 (cloze) civarında ele alınacak.
+
+**⚠️ Sırada:** 50 kelimelik gerçek pilot (`gloss --l1 es --limit 50 --yes`,
+tek modelle) kullanıcı tarafından koşulacak; QA reddetme oranı §9.4 biçiminde
+raporlanacak. Oran iyiyse `pt-BR`ye geçilecek, kötüyse prompt/QA düzeltilip
+koşu büyütülmeyecek. `delivery materialize --l1 es` İş 7 bitene kadar
+**koşulmamalı** (`_dist_meta.json` tek L1 tanır, ikinci dil ilk dilin
+manifest kaydını ezer).
+
+### 9.9 İş 2b ölçümü (2026-09-06) — dil simetrisi, `cards` L1 üretmeyi bıraktı
+
+İş 1 + İş 2'nin bıraktığı asimetri kapatıldı: `cards` artık **yalnızca
+İngilizce kart** üretir, ana dil karşılığı — Türkçe dahil — **yalnızca**
+`gloss` koşusundan gelir. Dört dil (`tr`/`es`/`pt-BR`/`de`) tek yoldan
+üretiliyor; `tr` için ayrı kod yolu, ayrı bayrak, ayrı istisna kalmadı.
+
+**Neden yapıldı — ölçülen para kaybı.** Ayırmadan önce kart QA'sı L1
+karşılığı bozuk diye **ödenmiş İngilizce kartın tamamını** reddediyordu.
+Depodaki 43 reddedilmiş kartın `reject_reason` dökümü (tahmin değil, ölçüm):
+
+| reject_reason | adet | kaynak |
+|---|---|---|
+| `gloss_en_kelimenin_kendisini_iceriyor` | 19 | EN kart |
+| `looks_conjugated` | 14 | **L1** (`tr.check_form`) |
+| `l1_ceviri_yapilmamis` | 4 | **L1** (`l1_form.check`) |
+| `verb_missing_infinitive` | 3 | **L1** (`tr.check_form`) |
+| `ornek_cumle_cok_kisa` | 3 | EN kart |
+
+**43 reddin 21'i (%49) yalnızca Türkçe karşılık yüzünden çöpe atılmış,
+ödenmiş İngilizce karttır.** İşin varlık sebebi budur.
+
+**Değişen altı dosya.** `prompt.py` (`gloss_l1` alanı + `get_rules`/
+`PROMPT_RULES` çıktı, `build` artık `l1` almıyor) · `qa.py` (üç L1 kontrolü
+çıktı, `run` artık `l1` almıyor, payload'da `gloss_l1` yok) · `job.py`
+(`prepare`/`_l1` silindi, `prompt_version` **v1 → v2**) · `store.py`
+(`sense_gloss_l1` INSERT'ü silindi; `_write_content` → `_write_examples`) ·
+`commands/cards_command.py` (`--l1` **tamamen kaldırıldı**) · `app.py`
+(yardım metinleri). `l1_form.py` yerinde kaldı, tek çağıranı `gloss/qa.py`.
+
+**`--l1` kararı (kullanıcı).** Bayrak sessizce yok sayılmadı, **kaldırıldı**:
+`cards --l1 de` → `error: unrecognized arguments: --l1 de`, **exit 2**,
+hiçbir çağrı yapılmadan. Kullanıcının yolu bulacağı yer `cards` komutunun
+yardım metnidir ("ana dil karşılığı ayrı koşudur: `gloss --l1 <kod>`").
+
+**Ölçüm (gerçek `data/` üzerinde, sıfır LLM çağrısı, hepsi `--dry-run`):**
+
+| komut | sonuç |
+|---|---|
+| `cards --tag v7 --limit 1000 --dry-run` | **0 ödenecek çağrı**; çıktı işten önce/sonra **birebir aynı** (`diff` boş) |
+| `gloss --l1 tr --dry-run` | **0 ödenecek çağrı** (957 mevcut `tr` karşılığı `skip_done`) |
+| `gloss --l1 es --dry-run` | **957 işlenecek** (ayırma `es`'i bozmadı) |
+
+Prompt metni değişti ve `prompt_version` v2'ye çıktı ama **hiçbir satır
+yeniden tetiklenmedi** — çünkü `plan/verdict.py::decide` `prompt_hash`e
+bakmaz, yalnızca `tier`/`status`/`rank`e bakar. Bu, işin risksiz olmasının
+tek dayanağıydı ve başlamadan önce doğrulandı. Koşulardan sonra depo
+sayımları değişmedi: `sense_cards` 957/43, `sense_gloss_l1` 957 `tr`,
+`sense_gloss_l1_state` 0 satır, `prompt_hash` 1000 satırda hâlâ `v1`.
+**Migration yok, yeniden üretim yok, yeniden ödeme yok.**
+
+**Reddedilmiş kartlar için `--redo bad --dry-run` raporu (KOŞULMADI).**
+Ayırmadan sonra yalnızca L1 yüzünden reddedilmiş 21 kart artık geçebilir.
+Aday sayısı rank kapısına bağlıdır (43 reddin 34'ünü qwen/rank 40, 9'unu
+llama-3.3-70b/rank 20 yazmış):
+
+| model | rank | aday |
+|---|---|---|
+| `@cf/qwen/qwen3-30b-a3b-fp8` (varsayılan) | 40 | **0** — hepsi `skip_outranked` |
+| `@cf/meta/llama-3.3-70b-instruct-fp8-fast` | 20 | **34** |
+| `gemini-2.5-pro` | 10 | **43** |
+
+Koşma kararı kullanıcınındır; bu iş sıfır LLM parası harcadı.
+
+**Testler:** 220 → **222 yeşil**. Kart tarafından iki L1 parametrizasyonu
+(`gloss_l1_bos`, `verb_missing_infinitive`) çıkarıldı — **kontrol taşındı,
+kaybolmadı:** ikisinin de karşılığı `test_lexicon_gloss.py::
+test_qa_bozuk_cevabi_sebebiyle_reddeder` içinde zaten var, `tr` mastar
+kapısı ayrıca `test_tr_bozuk_mastar_kapisi_burada_da_calisir` ile ölçülüyor.
+Eklenen dört test: `test_gloss_l1i_olmayan_cevap_kabul_edilir` (işin varlık
+sebebi), `test_cevaptaki_gloss_l1_yuke_tasinmaz`,
+`test_kart_kosusu_sense_gloss_l1e_tek_satir_yazmaz` (uçtan uca, bugünkü
+davranışın tersi) ve `test_sense_gloss_l1in_tek_yazicisi_gloss_deposudur`
+— **kaynak denetimi**: `modules/lexicon_card/` altında o tabloya satır yazan
+tek dosya `gloss/store.py`; ikinci bir yazıcı geri sızarsa test düşer.
+`test_layering` yeşil, AST docstring denetimi 0 eksik, testler gerçek
+`data/`ye yazmıyor.
+
+**Kapsam dışı bırakıldı:** `delivery/` (`gate.py::l1_karsiligi_yok` kontrolü
+**gevşetilmedi** — ayırmadan sonra "gloss koşusunu unuttum" hatasını yakalayan
+ağ odur), `core/jobs/` motoru, `sense_gloss_l1` şeması, `data/stores/`
+içeriği.
+
+### 9.10 `es` pilotu sonrası düzeltme (2026-09-06) — yanlış redler kapatıldı
+
+`gloss --l1 es --limit 50` pilotu koşuldu: **47 onay / 3 red (%94)**. Redlerin
+model cevapları okununca oran aslında **%100** çıktı — üç cevap da doğru
+İspanyolcaydı:
+
+| birim | modelin cevabı | eski sonuç |
+|---|---|---|
+| `to` (particle) | `a` | `l1_ceviri_yapilmamis` |
+| `to` (prep) | `a` | `l1_ceviri_yapilmamis` |
+| `non` (adv) | `no` | `l1_ceviri_yapilmamis` |
+
+Sebep `l1_form.check`in dil işaretçi kapısı: cevapta İspanyolca işaretçi yok,
+İngilizce işaretçi (`a`, `no`) var → red. Tek kelimelik işlev sözcüğünde bu
+sinyalin **ayırt etme gücü sıfırdır** — iki dil orada aynı harfleri kullanır.
+Dahası yeniden deneme aynı doğru cevabı üretip aynı duvara çarptı: **50 birim
+için 53 çağrı ödendi, 3 fazlanın hepsi baştan kaybedilmiş tekrardı.**
+
+Bu, projenin kendi kuralının (§6.7 "garanti edilemeyen kontrol reddetmez,
+uyarır") ihlaliydi. Günlük taranınca **aynı sınıftan üç hata** bulundu:
+
+**1. Dil işaretçi kapısı (dört dili de etkiler).** Artık yalnızca cevap
+`MIN_WORDS_FOR_LANG_GATE = 3` kelime ve üzeriyse reddeder; kısa cevapta
+`l1_ceviri_supheli_kisa_karsilik` **uyarısı** yazılır (iz kaybolmaz, satır
+kabul edilir). Uzun İngilizce cevap hâlâ reddedilir — kapı kaldırılmadı,
+**koşullandı**.
+
+**2. `tr.py::looks_conjugated` (ölçülen en büyük yanlış alarm kaynağı).**
+Kart günlüğünde 35 denemede çalıştı; 18 farklı cevabın **16'sı sıradan
+Türkçe isimdi**: `kutu`, `kedi`, `kötü`, `garanti`, `kahvaltı`, `kendi`,
+`esinti`, `öğle vakti`, `vuruş aleti`, `türemiş`, `açıklamalı`… Türkçe
+isimlerin büyük bölümü `-dı/-di/-du/-dü/-tı/-ti/-tu/-tü` ile biter;
+morfoloji çözümleyicisi olmadan bu ayrım yapılamaz. Kod artık
+`SOFT_FORM_CODES` üzerinden **uyarı**. Fiil mastarı kapısı
+(`verb_missing_infinitive`) ölçüldü, doğru çalışıyor — **reddetmeye devam
+eder**.
+
+**3. `gloss/qa.py::gloss_l1_kart_kopyasi` (pt-BR/de'yi vuracaktı).** Karşılık
+kelimenin kendisiyle aynı diye reddediyordu; oysa `hotel`/`animal`/`no` gibi
+eş kökenli ve işlev sözcüklerinde **doğru cevap tam olarak budur**. Artık
+`l1_karsilik_kelimenin_kendisiyle_ayni` uyarısı. Kartın İngilizce TANIMINI
+aynen döndürmek garanti edilebilir bir hatadır, o **reddedilmeye devam eder**.
+
+**Yeni arayüz üyesi.** `core/lang/<kod>.py` artık `SOFT_FORM_CODES` ilan
+edebilir — `check_form`un ürettiği ama REDDETMEYEN kodlar. Kural modülü
+olmayan dilde boş küme (kayıt sözleşmesi testi var). `l1_form.check` artık
+`FormResult(reject, warnings)` döner.
+
+**Ölçüm — günlükteki her reddedilmiş deneme yeni kapıdan geçirildi (replay,
+sıfır LLM çağrısı):**
+
+| koşu | L1 kaynaklı reddedilmiş deneme | yeni kapıda geçer | hâlâ reddedilir |
+|---|---|---|---|
+| `gloss_l1` (`es` pilotu) | 6 | **6** (3 birim) | 0 |
+| `card` (`tr`, tarihsel) | 64 | **52** | 12 |
+
+Hâlâ reddedilen 12'nin hepsi **gerçek hata**: model fiil anlamına isim
+döndürmüş (`class`→"sınıf", `end`→"son", `need`→"gerek", `show`→"gösteri"…).
+Tek tartışmalı kalan `clear`→"açıkla(mak)" — parantez yüzünden mastar eki
+kuyrukta görünmüyor; kapıyı daha fazla gevşetmemek için dokunulmadı.
+
+**Testler:** 233 → **235 yeşil**. Eklenen 12 test doğrudan ölçülen vakaları
+çiviliyor: `non`→"no" ve `to`→"a" artık **reddedilmiyor**, uzun İngilizce
+cevap **hâlâ reddediliyor**, `hotel`→"hotel" geçiyor, `kutu`/`kedi`/`garanti`
+geçiyor, `koşuyor` **hâlâ reddediliyor**, kart tanımı kopyası **hâlâ
+reddediliyor**. İş 2b'nin kabul ölçütleri bozulmadı: `cards --dry-run` ve
+`gloss --l1 tr --dry-run` çıktıları düzeltmeden önce/sonra birebir aynı.
+
+**⚠️ Kurtarılamayan 3 satır — motor sınırı, kullanıcı kararı.** Pilotta
+reddedilen 3 birimin `sense_gloss_l1_state` satırı `rejected`/qwen(rank 40)
+olarak duruyor. `verdict.decide`in rank kapısı HER modda açık ("aynı model
+aynı cevabı üretir") — ama burada değişen model değil **kapının kendisi**
+olduğu için bu varsayım geçerli değil. Sonuç: `gloss --l1 es` (hatta
+`--redo bad`) o üçünü hâlâ `skip_outranked` diyor. Üç promptun **üçü de
+`llm_cache`'te var**, yani o 3 durum satırı silinirse yeniden koşu **sıfır
+kuruşa** onları onaylar. `core/jobs/` motoruna dokunulmadı (kapsam dışı);
+satır silme bir veri işlemidir, kullanıcı kararına bırakıldı.
+
+### 9.11 İş 3 ölçümü (2026-09-06) — çeviri katmanı (`note` + `translate`)
+
+Kod bitti, gerçek `v7` üzerinde yalnızca `--dry-run` ile doğrulandı (para
+harcanmadı). Yeni iki `kind`, mevcut `gloss` deseninin ikizi:
+
+| komut | ne üretir | dile bağlı mı |
+|---|---|---|
+| `lexicon-card note` | `usage_note` — KOŞULLU (sebep yoksa boş, red DEĞİL) | hayır |
+| `lexicon-card translate --l1 <kod>` | tanım+not+2 örnek, TEK çağrıda | evet (`variant=l1`) |
+
+**Şema:** 4 yeni tablo (`sense_usage_note`, `sense_translation`,
+`sense_translation_examples`, `sense_gloss_l1_note`) — mevcut hiçbir tablo
+**değişmedi**. `sense_cards.usage_note` sütunu şemada kalır ama artık hep
+`NULL` yazılır (tek üreticisi `note/store.py` oldu). `cards`
+`prompt_version` v2→v3, `gloss` v1→v2 (isteğe bağlı `gloss_note`, madde 9).
+
+**Kart yeniden tetiklenmedi (§ en kritik kanıt):** `cards --tag v7 --limit
+1000 --dry-run` çıktısı iş öncesi/sonrası **bayt bayt aynı** (957 skip_done,
+43 skip_outranked, 0 ödenecek çağrı) — `verdict.decide` `prompt_hash`e
+bakmadığı doğrulandı.
+
+**Gerçek `v7` planı (957 onaylı kart, hepsi `--dry-run`):**
+
+| koşu | işlenecek | atlanan | ödenecek çağrı |
+|---|---|---|---|
+| `note` | 957 | 0 | 957–1.914 |
+| `translate --l1 tr` | 957 | 0 | 957–1.914 |
+| `translate --l1 de` | 957 | 0 | 957–1.914 |
+| `translate --l1 pt-BR` | 957 | 0 | 957–1.914 |
+| `translate --l1 fr` (uydurma) | 957 | 0 | 957–1.914 |
+| `gloss --l1 tr` (etkilenmedi) | 0 | 957 | 0 |
+| `gloss --l1 es` (etkilenmedi) | 907 | 50 | değişmedi |
+
+`fr` satırı madde 10'un kanıtı: `polyvo.toml`da olmayan bir kod için DDL/kod
+değişikliği olmadan plan kuruldu (`l1` bir sütun, tablo değil).
+
+**Testle çivilenen kabul ölçütleri (274 test yeşil, 235'ten +39):**
+`tests/test_lexicon_note.py` (13), `tests/test_lexicon_translate.py` (19),
+`tests/test_review.py`ye +8 yeni. Kapsanan: notu boş bırakan cevap
+onaylanıyor / `gloss_en`in kopyası-yeniden-ifadesi reddediliyor · paket
+hepsi-ya-hiç reddediliyor · `sense_usage_note`/`sense_translation`a yazan
+tek sınıf sırasıyla `LexiconNoteStore`/`LexiconTranslationStore` (kaynak
+denetimi) · her `kind` için ikinci koşu `paid_calls=0` · bir dilin çevirisi
+diğerine dokunmuyor · insan satırı (tier 0) varken çağrı istenmiyor ·
+`review export/import --l1 de` yeni 4 alanı (`definition_l1`,
+`usage_note_l1`, `examples_l1`, `gloss_note_l1`) taşıyor, yazılan satır
+`tier=0`/`human` · satır içi "bulunmayan alan dokunulmaz" kuralı
+`sense_translation`ın TEK sütunu düzeyinde de geçerli (yalnızca
+`definition_l1` düzeltilince `usage_note` sütunu korunuyor). `test_layering`
+yeşil, AST docstring denetimi 0 eksik.
+
+**Kapsam dışı bırakılanlar (planlandığı gibi):** `delivery materialize --l1
+<tr dışında>` koşulmadı — İş 7'ye kadar yeni içerik sevkiyata girmiyor.
+Gerçek `note`/`translate` koşuları (957 kart × 2 çağrı ihtimali × 5 dil)
+**kullanıcı kararına bırakıldı** — sırayla `tr` → `es` → `pt-BR` → `de`,
+her biri önce `--limit 50 --dry-run`, sonra oran ölçülüp `job_attempts.
+raw_response` örneklenerek gerçek hata mı yanlış red mi ayrıştırılacak
+(`es` pilotunun dersi, §9.10).
+
+### 9.11b İş 3 gerçek koşusu (2026-09-07) — 50 kelime × 4 dil, YANLIŞ RED bulundu
+
+İlk gerçek `translate` koşusu (50 kelime, `cloudflare:@cf/qwen/qwen3-30b-a3b-fp8`):
+
+| L1 | onay | red | **gerçek hata** |
+|---|---|---|---|
+| tr | 50 | 0 | 0 |
+| es | 48 | 2 | **0** |
+| pt-BR | 45 | 5 | **0** |
+| de | 44 | 6 | **0** |
+
+§9.10'un dersi uygulandı: orana bakılıp geçilmedi, 13 reddedilen birimin
+`job_attempts.raw_response`u okundu. **On üçünün de çevirisi DOĞRUYDU**
+(`"in der Lage sein, etwas zu tun"`, `"aproximadamente; concerniente o
+relativo a algo"`, `"A loja vende diferentes tipos de mercadorias."`). Red
+sebebi 13'ünde de `l1_ceviri_yapilmamis` — yani kalite değil, **kapı**.
+
+**Kök neden — dil işaretçi kapısının iki yarısı da bozuktu:**
+
+1. **İngilizce yarısı her metinde ateşleniyordu.** Kapı "L1 işaretçisi YOK
+   **ve** İngilizce işaretçisi VAR" diyordu; `ENGLISH_MARKERS` `IGNORECASE`
+   ve içinde `a`, `no`, `in`, `so`, `as` gibi parçalar var. Bunların bir
+   İspanyolca/Portekizce/Almanca cümlede geçmemesi imkânsıza yakın → karar
+   fiilen tek başına L1 işaretçisine kalıyordu.
+2. **L1 yarısı hem dar hem büyük/küçük harfe duyarlıydı.** `es`/`pt-BR`/`de`
+   listelerinde `IGNORECASE` yoktu (yalnız `tr`de vardı), yani cümle başındaki
+   `"Eine"`/`"A"`/`"El"` sayılmıyordu. Üstüne `de` listesinde `der/das/ist/zu`,
+   `pt-BR` listesinde `de/que/em/por` gibi en sık işlev sözcükleri eksikti.
+   İşaretçinin YOKLUĞU red demek olduğu için bu daralma yanlış alarmı
+   azaltmıyor, **artırıyordu**.
+3. **`tr`nin %100'ü kapının çalıştığını değil, hiç çalışmadığını gösteriyor:**
+   Türkçe metin neredeyse her zaman `ç ğ ı ö ş ü` içerir, kapı hiç ateşlenmez.
+   `es` `gloss` koşusunda daha az görülmesinin sebebi de başka bir muafiyetti
+   (`l1_form.MIN_WORDS_FOR_LANG_GATE = 3`, kısa cevap muaf); `translate` bunu
+   1'e indirip kapıyı tanım + her örneğe **ayrı ayrı** uyguluyor, paket
+   hepsi-ya-hiç olduğu için 3 bağımsız yanlış-red şansı tek pakete biniyor.
+
+Her birim 2. denemeyi de harcadı (model aynı doğru cevabı üretip aynı duvara
+çarptı) → **13 birim = ~26 ödenmiş çağrı, tamamı kayıp.** §9.10'daki `es`
+`gloss` pilotuyla aynı hata sınıfı, daha büyük ölçekte.
+
+**Düzeltme (2026-09-07):**
+
+- `core/text/qa.py::english_marker_hits(text, ambiguous)` — hedef dilde DE
+  geçen işaretçi İngilizce KANITI sayılmaz.
+- Her dil modülüne `ENGLISH_AMBIGUOUS` eklendi (`es`: a/no/me/he/ve · `pt-BR`:
+  a/as/do/no/me/so · `de`: in/so/am/an/will/was/her/also · `tr`:
+  at/an/on/in/her/not/it). `LANG_MARKERS` genişletildi ve `IGNORECASE` açıldı.
+  **Sözleşme:** `LANG_MARKERS` = "İngilizce'de geçmeyen L1 kelimeleri",
+  `ENGLISH_AMBIGUOUS` = "L1'de de geçen İngilizce kelimeleri"; bir kelime
+  ikisinde birden olamaz (testle çivilendi — bu test yazarken kendi `de`
+  listemdeki `am` çakışmasını ve no-op `man` girdisini yakaladı).
+- `translate/qa.py`: "model çevirmedi" kararının ağırlığı GARANTİ EDİLEBİLİR
+  katmana taşındı — cevap kaynak İngilizce metnin aynısı mı (`_unchanged`),
+  artık yalnız tanım için değil **her örnek için** ayrı ayrı. İşaretçi sezgisi
+  ikinci katman olarak kaldı.
+- Aynı kapının `modules/cloze/translate/language.py`deki kopyası da düzeltildi
+  (birebir aynı kusur vardı, İş 4 koşusu daha yapılmadan).
+
+**Düzeltme sonrası ölçüm (gerçek `v7` verisi üzerinde):**
+
+| ölçüm | sonuç |
+|---|---|
+| reddedilen 13 birimin 81 metni | **0** hâlâ reddedilen |
+| onaylı 561 çeviri metni (regresyon) | **0** yeni yanlış red |
+| gerçek İngilizce metni L1 cevabı gibi verince | **%98,5–98,6** yakalanıyor (4 dilde) |
+| kalan ~%1,5 | zaten `_unchanged` ile yakalanıyor (metin kaynağın aynısı) |
+
+**371 test yeşil** (342'den +29): 13 gerçek ham cevap `test_lexicon_translate.
+py`ye regresyon olarak çivilendi, `test_lang_rules.py`ye iki listenin
+sözleşme testleri eklendi.
+
+**Yeniden koşu BEDAVA:** prompt metni değişmediği için 13 birimin hepsi
+`llm_cache`de (doğrulandı: es 2/2, de 6/6, pt-BR 5/5 önbellekte).
+`--redo bad` sıfır ödenen çağrıyla 13 satırı onaya çevirmeli.
+
+### 9.12 İş 4 ölçümü (2026-09-07) — `modules/cloze`, mimarinin sınavı
+
+Kod bitti, gerçek `v7` üzerinde yalnızca `--dry-run` ile doğrulandı (para
+harcanmadı). Sorulan asıl soru "cloze üretilebilir mi" değil, **yeni bir
+içerik türü mimariye bir klasör olarak girebiliyor mu** idi.
+
+**Ayak izi (ölçüldü, iddia değil).** `cloze` kelimesi `src/polyvo/` altında
+`modules/cloze/` dışında yalnızca 5 dosyada geçiyor:
+
+| dosya | neden |
+|---|---|
+| `modules/lexicon_card/public.py` | **yeni dosya** — kartın ilan edilmiş salt-okunur yüzeyi |
+| `review/targets.py` · `record.py` · `apply.py` · `export.py` | insan düzeltme yolu (kabul ölçütü) |
+
+`core/` · `curriculum/` · `delivery/` · `panel/` host'u ve `lexicon_card`ın
+üretim dosyaları (`prompt.py`, `qa.py`, `store.py`, `schema.py`, `job.py`,
+`gloss/`, `note/`, `translate/`): **tek satır değişmedi.** CLI'da `cloze
+generate/translate`, panelde `/cloze` sayfası host'ta hiçbir kayıt
+tutulmadan göründü (`find_apps` → `mounted_pages` çıktısıyla doğrulandı).
+
+**Modül sınırı artık ölçülüyor.** Görev tanımı §A.3'ün öncülü yanlıştı:
+`test_layering` modüller-arası **tüm** importları zaten yasaklıyordu. Test
+gevşetilmedi, *ölçülü* kılındı — `polyvo.modules.<A>` → `<B>` importu
+yalnızca `<B>.public` olabilir (derin import ihlal), ayrıca `lexicon_card →
+cloze` **yön kuralıyla** her koşulda yasak. Denetleyicinin sahte bir ihlali
+gerçekten yakaladığı da test ediliyor.
+
+**Şema:** yeni dosya `data/stores/cloze.sqlite`, 5 tablo. Şıklar
+İngilizcedir ve çevrilmez → `sense_cloze_option` dile bağlı **değil**;
+beşinci dil yeni satırdır, DDL değişmez (testle çivilendi: `fr` koşusundan
+önce/sonra `sqlite_master` aynı).
+
+**QA'nın red/uyarı ayrımı (§6.7).** Bu işin en büyük kalite riski
+"çeldirici gerçekten uymuyor mu" sorusunun **ölçülememesidir** — gömme
+katmanı yok. Bu kontrol hiçbir zaman reddetmez, **her onaylı pakette
+`celdiricinin_uymadigi_dogrulanamadi` uyarısı** olarak `warnings` sütununa
+yazılır. Reddedenler yalnızca garanti edilebilenler: biçim (3 soru · 4 şık ·
+tek doğru cevap), boşluk (hedef kelime tam 1 kez, doğru yüzey biçimi),
+çeldiricinin hedefin çekimi olması, sözcük türü farkı, çeldiricinin CEFR'i
+hedefi aşması, cümle uzunluğunun bandın dışına çıkması, üç cümlenin aynı
+açılış 3-gram'ıyla başlaması.
+
+**Gerçek `v7` planı (hepsi `--dry-run`, para harcanmadı):**
+
+| koşu | işlenecek | ödenecek çağrı |
+|---|---|---|
+| `cloze generate --tag v7` | **957** | 957–1.914 |
+| `cloze generate --limit 50` | 50 | 50–100 |
+| `cloze translate --l1 tr` | 0 (henüz onaylı paket yok) | 0 |
+| `lexicon-card cards --limit 1000` (etkilenmedi) | 0 | **0** |
+
+Son satır kart tarafına zarar verilmediğinin kanıtı. `--dry-run` cloze
+deposunda **sıfır satır** bıraktı (şema dosyası kuruldu, içi boş).
+
+**Testle çivilenen kabul ölçütleri (338 test yeşil, 274'ten +64):**
+`test_cloze_qa.py` (23), `test_cloze_run.py` (10), `test_cloze_panel.py`
+(9), `test_cloze_translate.py` (10), `test_review.py`ye +9, `test_layering.
+py` yeniden yazıldı (2 kural). Kapsanan: sahne kısıtı deterministik (aynı
+birim iki kez → aynı prompt) · reddedilen paket **içerik yazmaz** · onaylı
+pakette uyarılar saklanır · tier-0 satır için çağrı istenmez · cloze
+`lexicon.sqlite`a **tek satır yazmaz** · şıklar çeviri promptuna **hiç
+girmez** · `polyvo.panel` importu yok (AST taraması) · depodan gelen metin
+HTML olarak yorumlanmaz · panel dosyalarında tek yazma sorgusu yok · bozuk
+tek satır varsa **iki ayrı SQLite dosyasında da hiçbir satır yazılmaz**
+(`ATTACH DATABASE`). AST docstring denetimi 0 eksik.
+
+**Bilinen iki borç (dürüstçe):**
+
+1. `qa/level.py`'nin "cümlede anlamın seviyesinin üstünde kelime" kapısı
+   red verir ve gerçek koşuda **en olası red sebebi** odur (`loan` B2, A2
+   cümlesinde). Kural prompt'a yazıldı ki redle öğrenmeyelim; yine de pilot
+   bunu ölçmeden ölçeklenmemeli — `es` pilotunun dersi tersinden geçerli:
+   burada **QA'nın ölçemediği şey kabul edilmiş görünür**.
+2. `cloze/translate/language.py::looks_english_not_l1`,
+   `lexicon_card/l1_language.py`nin kopyasıdır. App-app importu yasak,
+   `lexicon_card` üretim dosyaları kapsam dışı olduğu için kaçınılmazdı.
+   Temiz çözüm `core/lang/`e terfi; ayrı iş kalemi (dosyanın docstring'inde
+   yazılı).
+
+**Kapsam dışı bırakılanlar (planlandığı gibi):** `delivery materialize --l1
+<tr dışında>` koşulmadı; gömme/embedding katmanı kurulmadı; para harcayan
+hiçbir koşu başlatılmadı. Gerçek `cloze generate` pilotu (önce `--limit 50`,
+sonra `job_attempts.raw_response`tan **en az 10 soru elle okunarak**: cümle
+mantıklı mı, çeldiriciler gerçekten uymuyor mu, üç cümle birbirine benziyor
+mu) **kullanıcı kararına bırakıldı.**
+
+### 9.13 İş 3b ölçümü (2026-09-11) — `gloss`+`translate` tek çağrıda birleşti
+
+Kod bitti, gerçek `v7` üzerinde yalnızca `--dry-run` ile doğrulandı (para
+harcanmadı). Görev: `gloss --l1 X` (karşılık) ve `translate --l1 X` (çeviri)
+**iki ayrı çağrıyı** tek çağrıya indirmek — aynı girdiyi okuyup aynı dile
+yazan iki iş, para (~35.000 fazla çağrı) ve tutarlılık (gloss "kıyı" derken
+örnekte "yaka") kaybediyordu.
+
+**Şema değişmedi (sözleşme madde 1).** Beş tablo aynen kaldı:
+`sense_gloss_l1`, `sense_gloss_l1_note`, `sense_gloss_l1_state`,
+`sense_translation`, `sense_translation_examples`. Oturum başındaki hash
+karşılaştırmasıyla doğrulandı: `delivery/`, `review/`, `core/`, `panel/`,
+`lexicon_card/public.py` **tek satır değişmedi**; yalnızca `schema.py` ve
+`lexicon_card/store.py`'de eski `gloss/store.py` referansı taşıyan iki yorum
+satırı güncellendi.
+
+**Yeni yapı:** `modules/lexicon_card/gloss/` (6 dosya) ve
+`commands/gloss_command.py` **silindi**. `translate/` paketine tasindi:
+`units.py` (kartin baglamina `fixed_gloss` — depoda o dilde satir varsa —
+eklendi), `prompt.py` (tek prompt, tek JSON: `gloss_l1`+`gloss_note`+
+`definition`+`usage_note`+`examples`; sabit karsilik varsa model onu AYNEN
+kullanmaya zorlanir), `qa/` (yeni paket: `gloss.py` + `entry.py` eski iki
+QA'nin degismeden tasinmis hali, `__init__.py` sirayla cagirir — ilk red
+kazanir, uyarilar birlesir — + yeni `consistency.py`: karsilik hicbir
+ornekte gecmiyorsa **yalnizca uyari**, `TERM_MATCH_SUPPORTED` acik olmayan
+dilde hic calismaz), `store.py` (`LexiconL1EntryStore`: bes tablonun TEK
+yazicisi, PARCA BASINA ayni yazma kapisi `policy.should_write` ikinci kez
+cagrilir — onayli/insan parca hicbir kosulda ezilmez), `job.py`
+(`kind="l1_entry"`, `prompt_version="v1"`, `max_tokens=700`).
+
+**`lexicon-card gloss` kaldirildi (kullanicinin onayladigi karar).** Sessiz
+yok sayma yok: `invalid choice: 'gloss'`, **exit 2** (gercek CLI ile
+dogrulandi).
+
+**Store tasarimi — sozlesme madde 2 (kullanici karari).** `should_write`
+ikinci bir kural kumesi olmadan aynen gecerli: parca basina cagrilir, kesin
+daha iyi model onayli bir parcanin yerine yenisini yazabilir (eski
+store'larin davranisiyla ayni), ama esit/zayif model ve insan satiri hicbir
+kosulda ezilmez. Birim duzeyinde karar iki parcanin birlesimi: herhangi biri
+eksikse birim islenir (gloss onayli + ceviri eksik -> cagrilir, gloss
+DEGISMEZ — testle civilendi); ikisi de onayliysa `Existing` birlesir.
+
+**Ölçüm (gerçek `v7` deposu, sıfır LLM çağrısı, hepsi `--dry-run`):**
+
+| komut | sonuç |
+|---|---|
+| `translate --l1 tr --dry-run` | **8.884 işlenecek**, 50 atlanan (önceki gerçek `tr` koşusundan kalan) |
+| `translate --l1 es --limit 50 --dry-run` | **0 ödenecek çağrı** (ilk 50'nin iki parçası da dolu) |
+| `cards --tag v7 --limit 1000 --dry-run` | değişmedi (kart tarafı hiç dokunulmadı) |
+| `lexicon-card gloss --l1 tr` | `invalid choice`, **exit 2** |
+| `panel serve --list` | değişmedi, üç sayfa da bağlı |
+
+**Testler:** eski `test_lexicon_gloss.py` (20) + `test_lexicon_translate.py`
+(19) → **`tests/test_lexicon_l1_entry.py`** (tek dosya, 46 test) birleşti;
+her testin sözü korundu, biri bilerek TERSİNE çevrildi
+(`test_gloss_l1_artik_bu_isin_kapsaminda_sense_gloss_l1e_yazilir` — eskiden
+"translate gloss'a yazmaz" derdi, artık aynı çağrının parçası). Kaynak
+denetimi `test_sense_gloss_l1in_tek_yazicisi_gloss_deposudur` yeni yola
+güncellendi, kural gevşetilmedi (tek yazıcı artık `translate/store.py`).
+Yeni kabul testleri: tek birim → tek çağrı + beş tablo dolar, gloss onaylı +
+çeviri eksik → 1 çağrı ve gloss değişmez, insan gloss'u model tarafından
+ezilmez, bir parça reddi diğerini de yazdırmaz (hepsi ya da hiç), tutarlılık
+uyarısı red değil, `hotel`→`hotel` uyarı / `to`→`a` (es) onay aynen geçer.
+**528 test yeşil.** AST docstring denetimi (yalnızca `lexicon_card/`): 0
+eksik.
+
+**Kapsam dışı bırakıldı (planlandığı gibi):** `cards`, `note`, cloze,
+grammar, delivery, review, panel, şema DDL, `core/jobs/`, mevcut satırların
+taşınması/migrasyonu. Gerçek pilot (`translate --l1 tr --limit 50`)
+**kullanıcı kararına bırakıldı** — para harcamadan önce onay oranı eski iki
+işin oranıyla karşılaştırılacak, en az 10 ham cevap okunacak.

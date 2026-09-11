@@ -13,6 +13,8 @@ import unicodedata
 
 __all__ = [
     "ENGLISH_MARKERS",
+    "english_marker_hits",
+    "morphy_roots",
     "find_spans",
     "mentions_target",
     "split_sentences",
@@ -45,6 +47,20 @@ ENGLISH_MARKERS = re.compile(
     r")\b",
     re.IGNORECASE,
 )
+
+
+def english_marker_hits(text: str, ambiguous: frozenset[str] = frozenset()) -> int:
+    """Metindeki AYIRT EDICI Ingilizce isaretcilerinin sayisi.
+
+    `ambiguous` hedef dilde DE gecen isaretcilerdir (Ispanyolca "a"/"no",
+    Almanca "in", Portekizce "a"/"no") ve SAYILMAZ. OLCULDU (2026-09-07):
+    bu ayiklama yapilmadiginda dil kapisi DOGRU cevirileri reddediyordu —
+    bu kelimelerin bir Ispanyolca/Almanca/Portekizce cumlede hic gecmemesi
+    imkansiza yakindir, yani kapinin "Ingilizce kaniti" tarafi her zaman
+    ateslenip karari tek basina L1 isaretcisine birakiyordu.
+    """
+    return sum(1 for m in ENGLISH_MARKERS.finditer(text or "")
+               if m.group(0).lower() not in ambiguous)
 
 
 _VOWELS = "aeiou"
@@ -99,9 +115,14 @@ _WORD_RE = re.compile(r"[A-Za-z']+")
 # `wn.morphy` yalnizca cekim cozer, bu yuzden dogru arac budur.
 
 
-def _morphy_roots(token: str) -> set[str]:
+def morphy_roots(token: str) -> set[str]:
     """`token`un WordNet'e gore olasi kokleri (duzensiz cekimler icin —
-    mean->meant, leave->left — regex bunlari kapsayamaz). WordNet yoksa bos kume."""
+    mean->meant, leave->left — regex bunlari kapsayamaz). WordNet yoksa bos kume.
+
+    ILAN EDILMIS yuzeydedir cunku iki ayri soru ayni cevabi ister: "bu kelime
+    hedef kelimenin bir bicimi mi" (burasi) ve "bu kelimenin CEFR'i ne"
+    (`modules/cloze/cefr.py`). Ikinci cagiran olmasaydi ozel kalirdi; iki
+    kopya cekim cozumu ayrisirdi."""
     try:
         from nltk.corpus import wordnet as wn
     except Exception:
@@ -126,7 +147,7 @@ def find_spans_loose(text: str, headword: str) -> list[tuple[int, int, str]]:
     base = headword.lower()
     out = []
     for m in _WORD_RE.finditer(text):
-        if base in _morphy_roots(m.group(0)):
+        if base in morphy_roots(m.group(0)):
             out.append((m.start(), m.end(), m.group(0)))
     return out
 
@@ -140,7 +161,7 @@ def mentions_target(text: str, headword: str) -> bool:
     base = headword.lower()
     for token in _WORD_RE.findall(text):
         tok = token.lower()
-        if tok == base or base in _morphy_roots(tok):
+        if tok == base or base in morphy_roots(tok):
             return True
     return False
 

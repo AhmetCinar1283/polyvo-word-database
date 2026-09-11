@@ -107,6 +107,16 @@ class LLMProvider(ABC):
         `known_models`e duser, o da bossa None (serbest metin girisi)."""
         return list(self.known_models) or None
 
+    def peek_cached(self, prompt: str, cache_conn) -> LLMResult | None:
+        """Onbellekteki cevabi cagri YAPMADAN doner; yoksa `None`.
+
+        Hash'i ve parse'i `complete_json` ile PAYLASIR — ikinci bir kopya
+        okuma yolu, onbellek sozlesmesinin sessizce ayrismasi demekti."""
+        cached_response = get_cached(cache_conn, hash_prompt(self.label, prompt))
+        if cached_response is None:
+            return None
+        return LLMResult(_extract_json(cached_response), True, cached_response)
+
     def complete_json(
         self,
         prompt: str,
@@ -115,13 +125,22 @@ class LLMProvider(ABC):
         max_tokens: int,
         temperature: float,
         pace_delay: float = 0.0,
+        bypass_cache: bool = False,
     ) -> LLMResult:
         """Cache-first JSON cagrisi. Yalnizca parse edilebilen cevap cache'e
-        yazilir; gecici hatada `max_retries` kadar backoff ile yeniden dener."""
+        yazilir; gecici hatada `max_retries` kadar backoff ile yeniden dener.
+
+        `bypass_cache=True` yalnizca OKUMAYI atlar, yazmayi degil: `--force`
+        ile zorlanan birim onbellekteki eski cevabi degil MODELDEN taze bir
+        cevap almalidir (aksi halde --force ayni cevabi bedavaya geri verir
+        ve hicbir sey degistirmez), ama gelen taze cevap yine onbellege
+        yazilir — ayni prompt bir daha ikinci kez odenmesin diye."""
         prompt_hash = hash_prompt(self.label, prompt)
-        cached_response = get_cached(cache_conn, prompt_hash)
-        if cached_response is not None:
-            return LLMResult(_extract_json(cached_response), True, cached_response)
+        if not bypass_cache:
+            cached_response = get_cached(cache_conn, prompt_hash)
+            if cached_response is not None:
+                return LLMResult(_extract_json(cached_response), True,
+                                 cached_response)
 
         raw_text = self._request_with_retry(prompt, max_tokens=max_tokens, temperature=temperature)
         parsed = _extract_json(raw_text)

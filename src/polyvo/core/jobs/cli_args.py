@@ -15,17 +15,36 @@ from __future__ import annotations
 
 import argparse
 
-from polyvo.core.jobs.plan.verdict import REDO_MODES
+from polyvo.core.jobs.plan.verdict import FORCE_MODES, REDO_MODES
 
 
 def add_job_args(parser: argparse.ArgumentParser) -> None:
-    """`--redo`, `--dry-run`, `--yes`, `--max-new`, `--pace-delay` ekler."""
+    """`--redo`, `--force`, `--dry-run`, `--yes`, `--max-new`, `--pace-delay` ekler."""
     parser.add_argument(
         "--redo", choices=list(REDO_MODES), default="none",
         help="Mevcut satirlar icin: 'none' = kullanilabilir olani atla "
              "(varsayilan); 'bad' = eksikleri doldur VE kotu isaretli satirlari "
              "yeniden uret; 'only-bad' = yalnizca onarim, eksik satir uretme. "
              "Kotu OLMAYAN satira hicbir modda LLM cagrisi yapilmaz.")
+    parser.add_argument(
+        "--force", choices=list(FORCE_MODES), default=None,
+        help="Kotu satirlar icin RANK KAPISINI gevset — normalde ayni/zayif "
+             "modelle reddedilmis satir bir DAHA denenmez (para bosa gitmesin "
+             "diye), bu QA kurallari sonradan gevsetilse bile boyledir. "
+             "'self' = yalnizca AYNI seviyedeki modelle reddedilmis satirlari "
+             "yeniden dene ('elimdeki en iyisi bu, yine de dene'); "
+             "'all' = daha ONCE DAHA IYI bir model tarafindan reddedilmis "
+             "satirlari da dahil HER kotu satiri dene. Zorlanan birim IKI "
+             "asamadan gecer: (1) onay ISTEMINDEN ONCE onbellekteki eski "
+             "cevap BUGUNKU QA'dan gecirilir ve gecenler cagri yapilmadan "
+             "duzeltilir — 'H' desen bile bu kalicidir (--dry-run'da yalnizca "
+             "raporlanir, yazilmaz); (2) hala reddedilenler onaylarsan "
+             "MODELE gider ve onbellek ATLANIR, yani ayni model olsa bile "
+             "taze cevap alinir ve o cagri ODENIR. Rank kapisi HER --redo "
+             "modunda gecerlidir (kotu satir bir mod secimi degil bir "
+             "BOSLUKTUR), --force de ayni sekilde tum modlarda calisir. "
+             "ONAYLI satira ve insan kararina hicbir --force satirin uzerine "
+             "yazdirmaz — bu bayrak yalnizca 'denenir mi' sorusunu genisletir.")
     parser.add_argument(
         "--dry-run", action="store_true",
         help="Tek bir dis cagri YAPMADAN ne olacagini raporla ve cik.")
@@ -45,6 +64,7 @@ def run_kwargs(args: argparse.Namespace) -> dict:
     """Ayristirilmis bayraklari `engine.run` parametrelerine cevirir."""
     return {
         "redo": getattr(args, "redo", "none"),
+        "force": getattr(args, "force", None),
         "dry_run": getattr(args, "dry_run", False),
         "assume_yes": getattr(args, "assume_yes", False),
         "max_new": getattr(args, "max_new", None),

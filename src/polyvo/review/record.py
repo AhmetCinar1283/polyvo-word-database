@@ -9,21 +9,50 @@ Burada uygulanan uc kural:
     ornekleri yeniden yazmak zorunda kalmaz.
   * BILINMEYEN alan sessizce yok sayilmaz, satiri dusurur: `gloss_tr` diye
     bir yazim hatasi "hicbir sey olmadi"la sonuclanmamalidir.
-"""
+
+Is 3: `usage_note` artik `sense_usage_note`u adresler (kart sutununu DEGIL —
+bkz. `targets.py`). Yeni `_l1` sonekli alanlar (`definition_l1`,
+`usage_note_l1`, `examples_l1`, `gloss_note_l1`) cevrilmis icerigi tasir;
+hangi alanin hangi tabloya gittigi `targets.FIELD_TARGETS`tedir.
+
+Is 5: `cloze_rationale` (ipucu + sik basina aciklama) ve `cloze_rationale_l1`
+(cevirisi) ayni sayi sozlesmesini (`QUESTION_COUNT`/`OPTION_COUNT`) kullanir
+— ikinci bir kural kumesi yazilmaz. Bicim `cloze` alaninin ikizi: soru
+basina bir ipucu, sik basina bir aciklama.
+
+Is 6: `grammar` (cumle basina en cok `MAX_RULES_PER_SENTENCE` kurallik
+paket) ve `grammar_l1` (notlarin cevirisi) `cloze_rationale` ile AYNI
+`QUESTION_COUNT` sozlesmesini kullanir — grammar'in cumleleri BUGUN yalnizca
+`cloze`dan geldigi icin (bkz. `apply.py`). `rule_id` biciminin (KATALOG
+VARLIGI degil, yalnizca `EN.<ALAN>.<KURAL>` bicimi) kapisi BURADADIR;
+katalogda GERCEKTEN var olup olmadigi `apply.py`de sorulur (o an katalog
+elde, burada degil)."""
 
 from __future__ import annotations
 
 import json
 from dataclasses import dataclass, field
 
+from polyvo.modules.cloze.difficulty import OPTION_COUNT, QUESTION_COUNT
+from polyvo.modules.grammar.catalog import is_valid_id as grammar_is_valid_id
+from polyvo.modules.grammar.model import (
+    MAX_RULES_PER_SENTENCE,
+    MIN_RULES_PER_SENTENCE,
+)
+
 #: Insanin degistirebilecegi alanlar. IPA ve seviye burada YOK: `item_phonetics`
 #: tier sutunu tasimaz, yani yazma kapisi onu koruyamaz (v2).
 EDITABLE_FIELDS: tuple[str, ...] = (
-    "gloss_en", "register", "usage_note", "gloss_l1", "examples")
+    "gloss_en", "register", "usage_note", "gloss_l1", "examples",
+    "definition_l1", "usage_note_l1", "examples_l1", "gloss_note_l1",
+    "cloze", "cloze_l1", "cloze_rationale", "cloze_rationale_l1",
+    "grammar", "grammar_l1")
 
-#: `null` yazilarak bosaltilabilen alanlar. Gloss'lar burada YOK — glosssuz
-#: kart sevk edilemez, "bosalt" istegi bir duzeltme degil bir kayiptir.
-NULLABLE_FIELDS: frozenset[str] = frozenset({"register", "usage_note"})
+#: `null` yazilarak bosaltilabilen alanlar. Gloss'lar/tanimlar burada YOK —
+#: onlarsiz kart/ceviri sevk edilemez, "bosalt" istegi bir duzeltme degil
+#: bir kayiptir. Notlar KOSULLUDUR, bosaltmak GECERLI bir duzeltmedir.
+NULLABLE_FIELDS: frozenset[str] = frozenset({
+    "register", "usage_note", "usage_note_l1", "gloss_note_l1"})
 
 #: Dosyada bulunabilen ama KARARA GIRMEYEN alanlar (export baglam icin yazar,
 #: yedek zaman damgasi ekler). Varliklari hata degildir; degerleri okunmaz.
@@ -55,13 +84,152 @@ class Correction:
         return json.dumps(row, ensure_ascii=False, sort_keys=True)
 
 
+def _check_cloze(value: object) -> str | None:
+    """Insanin yazdigi cloze paketini dogrular.
+
+    Sayilar `modules/cloze/difficulty.py`den gelir — insan yolu ile model
+    yolu AYNI sozlesmeyi kullanir, ikinci bir kural kumesi yazilmaz. Zorluk
+    ETIKETI beklenmez: hangi sirada hangi zorluk oldugu sabittir, `apply.py`
+    onu siradan turetir."""
+    if not isinstance(value, list) or len(value) != QUESTION_COUNT:
+        return "cloze_soru_sayisi_uc_degil"
+    for item in value:
+        if not isinstance(item, dict):
+            return "cloze_soru_nesne_degil"
+        for name in ("sentence", "answer"):
+            text = item.get(name)
+            if not isinstance(text, str) or not text.strip():
+                return f"cloze_{name}_bos"
+        options = item.get("options")
+        if not isinstance(options, list) or len(options) != OPTION_COUNT:
+            return "cloze_sik_sayisi_dort_degil"
+        if any(not isinstance(o, str) or not o.strip() for o in options):
+            return "bos_cloze_sikki"
+        if len({o.strip().lower() for o in options}) != OPTION_COUNT:
+            return "cloze_siklari_birbirinin_aynisi"
+        if item["answer"].strip().lower() not in {
+                o.strip().lower() for o in options}:
+            return "cloze_dogru_cevap_siklar_arasinda_yok"
+    return None
+
+
+def _check_cloze_rationale(value: object) -> str | None:
+    """Insanin yazdigi ipucu/aciklama paketini dogrular.
+
+    Sayilar `cloze` alaniyla AYNI sozlesmeden (`QUESTION_COUNT`/
+    `OPTION_COUNT`) gelir; uzunluk bandi (`rationale/shape.py`) BURADA
+    ZORLANMAZ — insan karari yazma kapisini her zaman gecer, yalnizca
+    SAYILABILIR bicim burada denetlenir."""
+    if not isinstance(value, list) or len(value) != QUESTION_COUNT:
+        return "rationale_soru_sayisi_uc_degil"
+    for item in value:
+        if not isinstance(item, dict):
+            return "rationale_soru_nesne_degil"
+        hint = item.get("hint")
+        if not isinstance(hint, str) or not hint.strip():
+            return "rationale_ipucu_bos"
+        reasons = item.get("reasons")
+        if not isinstance(reasons, list) or len(reasons) != OPTION_COUNT:
+            return "rationale_aciklama_sayisi_dort_degil"
+        if any(not isinstance(r, str) or not r.strip() for r in reasons):
+            return "bos_rationale_aciklamasi"
+    return None
+
+
+def _check_grammar_rule(rule: object) -> str | None:
+    """Insanin yazdigi TEK grammar kural satirini dogrular.
+
+    `rule_id` icin BURADA sorulan sey BICIM (`EN.<ALAN>.<KURAL>`); katalogda
+    GERCEKTEN var olup olmadigi `apply.py`nin isidir (katalog kod icinde
+    durur, burasi ona bakmaz)."""
+    if not isinstance(rule, dict):
+        return "grammar_kural_nesne_degil"
+    rule_id = rule.get("rule_id")
+    if not isinstance(rule_id, str) or not grammar_is_valid_id(rule_id):
+        return "grammar_rule_id_bicimi_gecersiz"
+    for name in ("trigger", "note"):
+        text = rule.get(name)
+        if not isinstance(text, str) or not text.strip():
+            return f"grammar_{name}_bos"
+    return None
+
+
+def _check_grammar(value: object) -> str | None:
+    """Insanin yazdigi grammar paketini dogrular.
+
+    Cumle sayisi `cloze_rationale` ile AYNI sozlesmeden (`QUESTION_COUNT`)
+    gelir: grammar'in cumleleri bugun yalnizca `cloze`dan gelir. `rank`
+    1..N BOSLUKSUZ ve YINELEMESIZ olmali (Is 6 §10) — bu SAYILABILIR bicim
+    kapisidir, `trigger`in cumlenin icinde olup olmadigi `apply.py`de
+    (o an cumle metni elde) sorulur."""
+    if not isinstance(value, list) or len(value) != QUESTION_COUNT:
+        return "grammar_cumle_sayisi_uc_degil"
+    for item in value:
+        if not isinstance(item, dict):
+            return "grammar_cumle_nesne_degil"
+        rules = item.get("rules")
+        if not isinstance(rules, list) or not (
+                MIN_RULES_PER_SENTENCE <= len(rules) <= MAX_RULES_PER_SENTENCE):
+            return "grammar_kural_sayisi_gecersiz"
+        ranks = [rule.get("rank") if isinstance(rule, dict) else None
+                for rule in rules]
+        if ranks != list(range(1, len(rules) + 1)):
+            return "grammar_rank_bosluklu_ya_da_yinelemeli"
+        for rule in rules:
+            problem = _check_grammar_rule(rule)
+            if problem:
+                return problem
+    return None
+
+
+def _check_grammar_l1(value: object) -> str | None:
+    """Insanin yazdigi grammar not cevirisini dogrular.
+
+    `rule_id`/`trigger` burada YOKTUR — ikisi de cevrilmez (Is 6 §18),
+    yalnizca `rank` (hangi kural notunun cevirisi oldugunu ADRESLEMEK icin)
+    ve cevrilen `note` verilir. Adreslenen `rank`in o cumlede GERCEKTEN var
+    olup olmadigi `apply.py`de sorulur (o an Ingilizce paket elde)."""
+    if not isinstance(value, list) or len(value) != QUESTION_COUNT:
+        return "grammar_l1_cumle_sayisi_uc_degil"
+    for item in value:
+        if not isinstance(item, dict):
+            return "grammar_l1_cumle_nesne_degil"
+        rules = item.get("rules")
+        if not isinstance(rules, list) or not rules:
+            return "grammar_l1_kural_listesi_bos"
+        for rule in rules:
+            if not isinstance(rule, dict):
+                return "grammar_l1_kural_nesne_degil"
+            if not isinstance(rule.get("rank"), int) or rule["rank"] < 1:
+                return "grammar_l1_rank_gecersiz"
+            note = rule.get("note")
+            if not isinstance(note, str) or not note.strip():
+                return "grammar_l1_note_bos"
+    return None
+
+
 def _check_value(field_name: str, value: object) -> str | None:
     """Bir alanin degerini dogrular; sorun varsa sebebini doner."""
     if value is None:
         if field_name in NULLABLE_FIELDS:
             return None
         return f"{field_name}_bos_birakilamaz"
-    if field_name == "examples":
+    if field_name == "cloze":
+        return _check_cloze(value)
+    if field_name in ("cloze_rationale", "cloze_rationale_l1"):
+        return _check_cloze_rationale(value)
+    if field_name == "grammar":
+        return _check_grammar(value)
+    if field_name == "grammar_l1":
+        return _check_grammar_l1(value)
+    if field_name == "cloze_l1":
+        if not isinstance(value, list) or len(value) != QUESTION_COUNT:
+            return "cloze_ceviri_sayisi_uc_degil"
+        for item in value:
+            if not isinstance(item, str) or not item.strip():
+                return "bos_cloze_ceviri_cumlesi"
+        return None
+    if field_name in ("examples", "examples_l1"):
         if not isinstance(value, list) or not value:
             return "ornekler_liste_degil_ya_da_bos"
         for item in value:
@@ -108,8 +276,13 @@ def parse_line(line: str) -> tuple[Correction | None, str | None]:
         problem = _check_value(name, value)
         if problem:
             return None, problem
-        values[name] = ([v.strip() for v in value] if name == "examples"
-                        else (value.strip() if isinstance(value, str) else value))
+        if name in ("examples", "examples_l1", "cloze_l1"):
+            values[name] = [v.strip() for v in value]
+        elif name in ("cloze", "cloze_rationale", "cloze_rationale_l1",
+                      "grammar", "grammar_l1"):
+            values[name] = value
+        else:
+            values[name] = value.strip() if isinstance(value, str) else value
 
     if not values:
         return None, "duzeltilecek_alan_yok"

@@ -1,7 +1,12 @@
 """
 Motorun giris kapisi — ince orkestratur, mantik tutmaz. Sirayla: preflight ->
-load_units -> load_existing -> make_plan -> render -> confirm -> execute ->
-report. `--dry-run` confirm'de durur, tek dis cagri yapilmaz.
+load_units -> load_existing -> make_plan -> revalidate -> render -> confirm ->
+execute -> report. `--dry-run` confirm'de durur, tek dis cagri yapilmaz.
+
+YENIDEN DEGERLENDIRME PLANDAN SONRA, RENDER'DAN ONCE calisir (`--force`
+verilmisse): hicbir dis cagri yapmadigi icin onaya tabi degildir, ve
+sonuclandirdigi birimleri plandan dusurur — bu yuzden ekrana basilan plan
+ile onay isteminde sorulan sayi GERCEKTEN odenecek olani gosterir.
 
 Baglanti sahipligi: `run` yalnizca KENDI actigi baglantilari kapatir.
 """
@@ -11,7 +16,7 @@ from __future__ import annotations
 from polyvo.core.jobs import attempts as attempt_log
 from polyvo.core.jobs import schema
 from polyvo.core.jobs.base import Job, JobContext
-from polyvo.core.jobs.engine import loop, reconcile
+from polyvo.core.jobs.engine import loop, reconcile, revalidate
 from polyvo.core.jobs.plan import confirm, planner, render
 from polyvo.core.jobs.plan.report import PlanReport
 from polyvo.core.jobs.store.base import ArtifactStore
@@ -26,7 +31,8 @@ def _empty_result(plan: PlanReport, run_id: str, skipped: int) -> reconcile.RunR
 
 
 def run(job: Job, ctx: JobContext, *, provider, store: ArtifactStore,
-        redo: str = "none", max_new: int | None = None, pace_delay: float = 0.0,
+        redo: str = "none", force: str | None = None,
+        max_new: int | None = None, pace_delay: float = 0.0,
         dry_run: bool = False, assume_yes: bool = False,
         cache_conn=None, attempts_conn=None) -> reconcile.RunResult:
     """Bir isi ucdan uca kostur ve olculmus sonucu dondur."""
@@ -52,8 +58,22 @@ def run(job: Job, ctx: JobContext, *, provider, store: ArtifactStore,
     try:
         existing = store.load_existing(ctx)
         plan = planner.make_plan(job, units, existing, model_label=provider.label,
-                                 model_rank=model_rank, mode=redo,
+                                 model_rank=model_rank, mode=redo, force=force,
                                  cache_conn=cache_conn)
+
+        if force is not None:
+            # `write=not dry_run`: prova kosusu ayni hesabi yapar ama depoya
+            # dokunmaz — `--dry-run --force self` "yeni QA kac satiri
+            # kurtarirdi" sorusunu bedavaya ve GERI DONULEBILIR sekilde
+            # cevaplar.
+            revalidate.report(
+                revalidate.run(job, ctx, units, plan, existing,
+                               provider=provider, store=store,
+                               cache_conn=cache_conn,
+                               attempts_conn=attempts_conn, run_id=run_id,
+                               model_rank=model_rank, write=not dry_run),
+                plan.command, force)
+
         render.render(plan)
 
         if dry_run:

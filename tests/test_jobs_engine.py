@@ -40,12 +40,20 @@ class FakeProvider:
         """Sahte on-kontrol — her zaman gecer."""
         return None
 
+    def peek_cached(self, prompt, cache_conn):
+        """Onbellekteki cevabi cagri yapmadan doner; yoksa None."""
+        from polyvo.core.llm.cache import get_cached, hash_prompt
+        hit = get_cached(cache_conn, hash_prompt(self.label, prompt))
+        if hit is None:
+            return None
+        return LLMResult({"text": hit}, True, hit)
+
     def complete_json(self, prompt, cache_conn, *, max_tokens, temperature,
-                      pace_delay=0.0):
+                      pace_delay=0.0, bypass_cache=False):
         """Onbellek-once davranisi dahil sahte bir cagri."""
         from polyvo.core.llm.cache import get_cached, hash_prompt, store_cached
         h = hash_prompt(self.label, prompt)
-        hit = get_cached(cache_conn, h)
+        hit = None if bypass_cache else get_cached(cache_conn, h)
         if hit is not None:
             return LLMResult({"text": hit}, True, hit)
         self.calls.append(prompt)
@@ -201,6 +209,103 @@ def test_onbellek_dolu_ama_depo_bossa_cagri_odenmez(conns):
     assert result.plan.cached_calls == 3
     assert result.plan.paid_calls == 0
     assert result.new_calls == 0
+
+
+def test_force_olmadan_ayni_model_kotu_satiri_bir_daha_denemez(conns):
+    """Rank kapisi PARA icin var: ayni model + ayni prompt = onbellekten ayni
+    cevap gelir. `--redo bad` bile bunu tek basina asamaz."""
+    store, provider = MemoryStore(), FakeProvider()
+    first = go(WordJob(reject=("bank",)), store, provider, conns)
+    assert first.rejected == 1
+
+    second = go(WordJob(reject=("bank",)), store, provider, conns, redo="bad")
+    assert second.plan.skipped() == {"skip_not_bad": 2, "skip_outranked": 1}
+    assert second.new_calls == 0
+
+
+def test_force_gevsemis_qa_ile_satiri_CAGRI_YAPMADAN_kurtarir(conns):
+    """`--force`un ILK asamasi: onbellekteki eski cevap BUGUNKU QA'dan
+    gecirilir. QA gevsetildiyse satir bir kurus odenmeden onaylanir."""
+    store, provider = MemoryStore(), FakeProvider()
+    first = go(WordJob(reject=("bank",)), store, provider, conns)
+    assert first.rejected == 1
+    assert store.rows["en:bank"].status == "rejected"
+
+    # QA duzeltildi: artik hicbir kelime reddedilmiyor.
+    second = go(WordJob(), store, provider, conns, redo="bad", force="self")
+    assert second.plan.process_total == 0      # yeniden degerlendirme tuketti
+    assert second.plan.skipped()["skip_revalidated"] == 1
+    assert second.new_calls == 0               # HICBIR dis cagri yok
+    assert store.rows["en:bank"].status == "approved"
+
+
+def test_force_dry_run_kurtarilacaklari_sayar_ama_YAZMAZ(conns):
+    """`--dry-run --force`: ayni hesap yapilir, depo DEGISMEZ — 'raporla ve
+    cik' sozunun 'depoya dokunmaz' yarisi."""
+    store, provider = MemoryStore(), FakeProvider()
+    go(WordJob(reject=("bank",)), store, provider, conns)
+
+    plan = go(WordJob(), store, provider, conns, redo="bad", force="self",
+              dry_run=True).plan
+    assert plan.skipped()["skip_revalidated"] == 1   # kurtarilacagi RAPORLANDI
+    assert store.rows["en:bank"].status == "rejected"  # ama yazilmadi
+
+
+def test_force_qa_hala_reddediyorsa_ONBELLEGI_ATLAYIP_modele_gider(conns):
+    """`--force`un IKINCI asamasi: yeniden degerlendirme de reddettiyse birim
+    modele gider ve onbellek OKUMASI atlanir — yoksa ayni cevap geri gelir ve
+    --force hicbir sey degistirmezdi. O cagri BEDAVA DEGILDIR."""
+    store, provider = MemoryStore(), FakeProvider()
+    go(WordJob(reject=("bank",)), store, provider, conns)
+    provider.calls.clear()
+
+    second = go(WordJob(reject=("bank",)), store, provider, conns,
+                redo="bad", force="self")
+    assert second.plan.process_total == 1
+    assert second.plan.cached_calls == 0      # zorlanan birim "bedava" sayilmaz
+    assert second.plan.paid_calls == 1
+    assert second.new_calls == 1              # onbellek atlandi, model arandi
+    assert provider.calls == ["kelime: bank"]
+
+
+def test_force_self_daha_zayif_modeli_zorlamaz(conns):
+    """'self' yalnizca AYNI seviyedeki modeli zorlar — daha zayif model
+    hala atlanir ('all' gerekir). qwen3-30b rank 40, qwen3:8b rank 50."""
+    store = MemoryStore()
+    stronger = FakeProvider(label="cloudflare:@cf/qwen/qwen3-30b-a3b-fp8")
+    first = go(WordJob(reject=("bank",)), store, stronger, conns)
+    assert first.rejected == 1
+
+    weaker = FakeProvider(label="local:qwen3:8b")
+    second = go(WordJob(reject=("bank",)), store, weaker, conns,
+               redo="bad", force="self")
+    assert second.plan.skipped() == {"skip_not_bad": 2, "skip_outranked": 1}
+
+
+def test_force_all_daha_zayif_modelle_de_dener(conns):
+    """'all': daha once DAHA IYI model reddetmis olsa bile dener."""
+    store = MemoryStore()
+    stronger = FakeProvider(label="cloudflare:@cf/qwen/qwen3-30b-a3b-fp8")
+    first = go(WordJob(reject=("bank",)), store, stronger, conns)
+    assert first.rejected == 1
+
+    weaker = FakeProvider(label="local:qwen3:8b")
+    second = go(WordJob(reject=("bank",)), store, weaker, conns,
+               redo="bad", force="all")
+    assert second.plan.process_total == 1
+    assert "--force all" in "\n".join(render.format_plan(second.plan))
+
+
+def test_force_onayli_satira_dokunmaz(conns):
+    """Force yalnizca kotu satirin rank kapisini genisletir — onayli satira
+    hicbir --force LLM cagrisi yaptirmaz."""
+    store, provider = MemoryStore(), FakeProvider()
+    first = go(WordJob(), store, provider, conns)
+    assert first.approved == 3
+
+    second = go(WordJob(), store, provider, conns, redo="bad", force="all")
+    assert second.new_calls == 0
+    assert second.skipped == 3
 
 
 # ── Yazma kapisi ve butce ─────────────────────────────────────────────────

@@ -5,6 +5,9 @@ motoru, gercek QA'yi ve gercek depoyu kullanir.
 Olculen sey Adim 5'in kabul kriterleridir: kart butun parcalariyla yazilir,
 IKINCI KOSUDA `paid_calls = 0` (artimlilik), QA kotu cevabi REDDEDER ve
 reddedilen satir icerik yazmaz, insan satirina dokunulmaz.
+
+Is 2b'den sonra buraya bir sey daha eklendi: kart DILE BAGLI DEGILDIR —
+`sense_gloss_l1`e tek satir yazmaz ve `gloss_l1` yuzunden REDDETMEZ.
 """
 
 from __future__ import annotations
@@ -31,7 +34,6 @@ GOOD_ANSWER = {
     "gloss_en": "to move quickly on foot",
     "register": "neutral",
     "usage_note": "",
-    "gloss_l1": "koşmak",
     "examples": ["I run every morning before work.",
                  "They ran across the empty field."],
 }
@@ -55,11 +57,18 @@ class FakeProvider:
         """Sahte on-kontrol — her zaman gecer."""
         return None
 
+    def peek_cached(self, prompt, cache_conn):
+        """Onbellekteki cevabi cagri yapmadan doner; yoksa None."""
+        hit = get_cached(cache_conn, hash_prompt(self.label, prompt))
+        if hit is None:
+            return None
+        return LLMResult(json.loads(hit), True, hit)
+
     def complete_json(self, prompt, cache_conn, *, max_tokens, temperature,
-                      pace_delay=0.0):
+                      pace_delay=0.0, bypass_cache=False):
         """Onbellek-once davranisi dahil sahte bir cagri."""
         h = hash_prompt(self.label, prompt)
-        hit = get_cached(cache_conn, h)
+        hit = None if bypass_cache else get_cached(cache_conn, h)
         if hit is not None:
             return LLMResult(json.loads(hit), True, hit)
         self.calls.append(prompt)
@@ -84,6 +93,8 @@ def _run(provider, **kwargs):
     """Motoru sahte saglayiciyla ucdan uca kosturur."""
     store = LexiconCardStore()
     try:
+        # `l1` BILEREK doldurulur: kart kosusu ctx.l1'i gorse bile
+        # `sense_gloss_l1`e tek satir yazmamali (Is 2b).
         return engine_run.run(LexiconCardJob(), JobContext(tag=TAG, l2=L2, l1=L1),
                               provider=provider, store=store, assume_yes=True,
                               **kwargs)
@@ -116,20 +127,37 @@ def _unit(headword="run", pos="verb"):
     (None, "cevap_json_degil"),
     ({**GOOD_ANSWER, "gloss_en": ""}, "gloss_en_bos"),
     ({**GOOD_ANSWER, "gloss_en": "to run fast"}, "gloss_en_kelimenin_kendisini_iceriyor"),
-    ({**GOOD_ANSWER, "gloss_l1": ""}, "gloss_l1_bos"),
-    ({**GOOD_ANSWER, "gloss_l1": "koşuyor"}, "verb_missing_infinitive"),
     ({**GOOD_ANSWER, "examples": ["I run every day."]}, "ornek_sayisi_yetersiz"),
     ({**GOOD_ANSWER, "examples": ["I run.", "I run."]}, "ornek_cumle_cok_kisa"),
     ({**GOOD_ANSWER, "examples": ["I run every day.", "I  run every  day."]},
      "ornekler_ayni"),
 ])
 def test_qa_bozuk_cevabi_sebebiyle_reddeder(bozuk, sebep):
-    result = qa_mod.run(bozuk, _unit(), L1)
+    result = qa_mod.run(bozuk, _unit())
     assert not result.ok and result.reason == sebep
 
 
+def test_gloss_l1i_olmayan_cevap_kabul_edilir():
+    """IS 2B'NIN VARLIK SEBEBI. Modelin cevabinda `gloss_l1` HIC yoksa bile
+    kart kabul edilir: gloss_en/register/ornekler saglamsa odenmis Ingilizce
+    kart, ana dil karsiligi yuzunden REDDEDILEMEZ. Depodaki 43 reddin 21'i
+    (looks_conjugated 14 + l1_ceviri_yapilmamis 4 + verb_missing_infinitive 3)
+    tam olarak bu yuzden atilmisti."""
+    result = qa_mod.run(GOOD_ANSWER, _unit())
+    assert result.ok
+    assert "gloss_l1" not in result.payload
+
+
+def test_cevaptaki_gloss_l1_yuke_tasinmaz():
+    """Model eski aliskanlikla `gloss_l1` dondurse bile QA onu TASIMAZ —
+    depoya sizacak bir yol kalmasin."""
+    result = qa_mod.run({**GOOD_ANSWER, "gloss_l1": "koşmak"}, _unit())
+    assert result.ok
+    assert "gloss_l1" not in result.payload
+
+
 def test_qa_taninmayan_register_reddetmez_uyarir():
-    result = qa_mod.run({**GOOD_ANSWER, "register": "sarkastik"}, _unit(), L1)
+    result = qa_mod.run({**GOOD_ANSWER, "register": "sarkastik"}, _unit())
     assert result.ok
     assert result.payload["register"] == "neutral"
     assert "register_taninmadi" in result.reason
@@ -144,14 +172,16 @@ def test_kart_butun_parcalariyla_tek_transactionda_yazilir():
 
     conn = schema.open_lexicon_db()
     card = conn.execute("SELECT gloss_en, tier, status FROM sense_cards").fetchone()
-    gloss = conn.execute("SELECT l1, gloss FROM sense_gloss_l1").fetchone()
+    gloss_count = conn.execute(
+        "SELECT COUNT(*) FROM sense_gloss_l1").fetchone()[0]
     examples = conn.execute("SELECT text FROM sense_examples ORDER BY seq").fetchall()
     level = conn.execute("SELECT cefr, freq_rank FROM item_level").fetchone()
     conn.close()
 
     assert card["gloss_en"] == GOOD_ANSWER["gloss_en"]
     assert (card["tier"], card["status"]) == (3, "approved")
-    assert tuple(gloss) == (L1, "koşmak")
+    # Kartin parcasi ARTIK L1 DEGIL: o tablonun tek yazicisi LexiconL1EntryStore.
+    assert gloss_count == 0
     assert len(examples) == 2
     assert tuple(level) == ("A1", 5)
 
@@ -170,7 +200,9 @@ def test_ikinci_kosuda_hic_odenmis_cagri_yapilmaz():
 
 def test_reddedilen_cevap_icerik_yazmaz_ama_satiri_kotu_isaretler():
     _seed_universe()
-    _run(FakeProvider(answer={**GOOD_ANSWER, "gloss_l1": "koşuyor"}))
+    _run(FakeProvider(answer={**GOOD_ANSWER,
+                              "examples": ["I run every day.",
+                                           "I  run every  day."]}))
 
     conn = schema.open_lexicon_db()
     card = conn.execute(
@@ -179,7 +211,7 @@ def test_reddedilen_cevap_icerik_yazmaz_ama_satiri_kotu_isaretler():
     assert conn.execute("SELECT COUNT(*) FROM sense_examples").fetchone()[0] == 0
     conn.close()
     assert card["status"] == "rejected"
-    assert card["reject_reason"] == "verb_missing_infinitive"
+    assert card["reject_reason"] == "ornekler_ayni"
     # QA reddederse YUK BOS doner — kartin icerigi hic yazilmaz. Satir yalnizca
     # "burasi kotu" demek icin durur, onarim kosusu (`--redo bad`) onu bulur.
     assert card["gloss_en"] is None
@@ -203,7 +235,7 @@ def test_insan_satirina_model_dokunamaz():
     store.save(JobContext(tag=TAG, l2=L2, l1=L1),
                WriteRequest(unit=unit,
                             payload={"gloss_en": "insan yazdi",
-                                     "gloss_l1": "koşmak", "examples": []},
+                                     "examples": []},
                             tier=TIER_HUMAN, model_label=None), None)
     store.commit()
     store.close()
@@ -216,3 +248,51 @@ def test_insan_satirina_model_dokunamaz():
     conn = schema.open_lexicon_db()
     assert conn.execute("SELECT gloss_en FROM sense_cards").fetchone()[0] == "insan yazdi"
     conn.close()
+
+
+# --- Dil simetrisi (Is 2b) ------------------------------------------------
+
+def test_kart_kosusu_sense_gloss_l1e_tek_satir_yazmaz():
+    """Model cevabi `gloss_l1` ICERSE ve kosunun bir `l1`i OLSA bile kart
+    deposu o tabloya dokunmaz — bugunku davranisin tam tersi."""
+    _seed_universe()
+    result = _run(FakeProvider(answer={**GOOD_ANSWER, "gloss_l1": "koşmak"}))
+    assert result.approved == 1
+
+    conn = schema.open_lexicon_db()
+    assert conn.execute("SELECT COUNT(*) FROM sense_gloss_l1").fetchone()[0] == 0
+    # Kartin kendisi normal sekilde yazildi — silinen sey yalnizca L1.
+    assert conn.execute("SELECT COUNT(*) FROM sense_cards").fetchone()[0] == 1
+    assert conn.execute("SELECT COUNT(*) FROM sense_examples").fetchone()[0] == 2
+    conn.close()
+
+
+def test_sense_gloss_l1in_tek_yazicisi_gloss_deposudur():
+    """KAYNAK DENETIMI: `modules/lexicon_card/` altinda `sense_gloss_l1`e
+    yazan tek dosya `translate/store.py` olmali. Bu kural calisma zamaninda
+    degil KAYNAKTA civilenir — ikinci bir yazici geri sizarsa test duser."""
+    import os
+    import re
+
+    root = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+        "src", "polyvo", "modules", "lexicon_card")
+    # Yalnizca SATIR YAZAN ifadeler; `CREATE TABLE` (schema.py) yazma degildir.
+    pattern = re.compile(
+        r"INSERT\s+(?:OR\s+\w+\s+)?INTO\s+sense_gloss_l1"
+        r"|UPDATE\s+sense_gloss_l1"
+        r"|DELETE\s+FROM\s+sense_gloss_l1",
+        re.IGNORECASE)
+
+    writers = []
+    for dirpath, _dirs, files in os.walk(root):
+        for name in files:
+            if not name.endswith(".py"):
+                continue
+            path = os.path.join(dirpath, name)
+            with open(path, encoding="utf-8") as f:
+                if pattern.search(f.read()):
+                    writers.append(os.path.relpath(path, root).replace("\\", "/"))
+
+    assert sorted(writers) == ["translate/store.py"], (
+        "`sense_gloss_l1`e yazan dosyalar: " + ", ".join(sorted(writers)))

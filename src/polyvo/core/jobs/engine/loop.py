@@ -6,7 +6,10 @@ gelirse istisna yukari firlamadan once her sey commit edilir — istisna
 yutulmaz, yalnizca GECIKTIRILIR (once ozet basilsin diye).
 
 KARAR PLANDAN OKUNUR (`plan.verdict_map()`), yeniden hesaplanmaz — ikinci
-bir karar noktasi plan ile kosuyu sessizce ayristirirdi.
+bir karar noktasi plan ile kosuyu sessizce ayristirirdi. Birimin ZORLANMIS
+olup olmadigi da ayni yerden okunur: zorlanan birim onbellegi atlar, cunku
+onbellekteki cevabi onay oncesi asama zaten yeni QA'dan gecirip reddetmistir
+(`revalidate.py`).
 """
 
 from __future__ import annotations
@@ -30,6 +33,7 @@ def execute(job: Job, ctx: JobContext, units: list[Unit], plan: PlanReport,
     """Plani uygular; sonucu olculmus sayaclarla doner. Kesinti yukari firlar."""
     result = RunResult(command=plan.command, run_id=run_id, plan=plan)
     verdicts = plan.verdict_map()
+    forced_keys = {e.key for e in plan.forced_entries()}
     budget = Budget(max_new)
     progress = Progress(plan.command, plan.process_total)
     interrupted: BaseException | None = None
@@ -47,7 +51,8 @@ def execute(job: Job, ctx: JobContext, units: list[Unit], plan: PlanReport,
             outcome = run_attempts(job, ctx, unit, provider=provider,
                                    cache_conn=cache_conn,
                                    attempts_conn=attempts_conn, run_id=run_id,
-                                   pace_delay=pace_delay)
+                                   pace_delay=pace_delay,
+                                   bypass_cache=unit.key in forced_keys)
             for _ in range(outcome.new_calls):
                 budget.charge(False)
             result.new_calls += outcome.new_calls

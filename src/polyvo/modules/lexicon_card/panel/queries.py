@@ -74,22 +74,48 @@ def list_cards(*, status: str | None = None, search: str | None = None,
     return out
 
 
+def _translations(conn, sense_id: int) -> list[dict]:
+    """`sense_id`nin TUM dillerdeki ceviri paketleri (Is 3) — dil basina
+    tanim/not/ornekler/durum. Reddedilmis paketin ICERIGI depoda yoktur."""
+    rows = conn.execute(
+        "SELECT l1, definition, usage_note, status, reject_reason, tier,"
+        " source FROM sense_translation WHERE sense_id = ? ORDER BY l1",
+        (sense_id,)).fetchall()
+    examples_by_l1: dict[str, list[str]] = {}
+    for l1, text in conn.execute(
+            "SELECT l1, text FROM sense_translation_examples"
+            " WHERE sense_id = ? ORDER BY l1, seq", (sense_id,)):
+        examples_by_l1.setdefault(l1, []).append(text)
+    return [
+        {"l1": l1, "definition": definition, "usage_note": usage_note,
+         "status": status, "reject_reason": reason, "tier": tier,
+         "source": source, "examples": examples_by_l1.get(l1, [])}
+        for l1, definition, usage_note, status, reason, tier, source in rows]
+
+
 def card(stable_key: str) -> dict | None:
     """Tek bir kartin tum parcalari (gloss, ornekler, L1, IPA, seviye)."""
     conn = lexicon_schema.open_lexicon_db()
     try:
         row = conn.execute(
             "SELECT item_id, sense_id, stable_key, gloss_en, register,"
-            " usage_note, tier, status, source, model, reject_reason,"
+            " tier, status, source, model, reject_reason,"
             " updated_at FROM sense_cards WHERE stable_key = ?",
             (stable_key,)).fetchone()
         if row is None:
             return None
         columns = ("item_id", "sense_id", "stable_key", "gloss_en", "register",
-                   "usage_note", "tier", "status", "source", "model",
+                   "tier", "status", "source", "model",
                    "reject_reason", "updated_at")
         detail = dict(zip(columns, row))
         sense_id, item_id = detail["sense_id"], detail["item_id"]
+
+        # `usage_note` Is 3'ten beri KARTIN sutunu DEGIL, kendi tablosu.
+        note_row = conn.execute(
+            "SELECT note, reason, status FROM sense_usage_note"
+            " WHERE sense_id = ?", (sense_id,)).fetchone()
+        detail["usage_note"] = note_row["note"] if note_row else None
+        detail["usage_note_reason"] = note_row["reason"] if note_row else None
 
         detail["examples"] = [
             (seq, text, tier, source) for seq, text, tier, source in conn.execute(
@@ -99,6 +125,11 @@ def card(stable_key: str) -> dict | None:
             (l1, gloss, tier, source) for l1, gloss, tier, source in conn.execute(
                 "SELECT l1, gloss, tier, source FROM sense_gloss_l1"
                 " WHERE sense_id = ? ORDER BY l1", (sense_id,))]
+        detail["gloss_notes_l1"] = {
+            l1: note for l1, note in conn.execute(
+                "SELECT l1, note FROM sense_gloss_l1_note WHERE sense_id = ?",
+                (sense_id,))}
+        detail["translations"] = _translations(conn, sense_id)
         detail["phonetics"] = [
             (variant, ipa, source) for variant, ipa, source in conn.execute(
                 "SELECT variant, ipa, source FROM item_phonetics"

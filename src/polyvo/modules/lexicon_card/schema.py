@@ -44,6 +44,23 @@ CREATE TABLE IF NOT EXISTS sense_gloss_l1 (
     PRIMARY KEY (sense_id, l1)
 );
 
+-- `sense_gloss_l1`in KARDESI: reddedilen bir cevirinin izini tutar.
+-- `sense_gloss_l1`in kendisinde `status` sutunu YOK (sema kilitli) — bu
+-- yuzden redo matrisi "kotu satir"i buradan tanir. Gercek gloss varsa
+-- (yukaridaki tablo) o HER ZAMAN kazanir; bu tablo yalnizca gloss YOKKEN
+-- "burasi denendi ve reddedildi" demek icin durur.
+CREATE TABLE IF NOT EXISTS sense_gloss_l1_state (
+    sense_id      INTEGER NOT NULL,
+    l1            TEXT    NOT NULL,
+    status        TEXT    NOT NULL,
+    reject_reason TEXT,
+    tier          INTEGER NOT NULL,
+    model         TEXT,
+    prompt_hash   TEXT,
+    updated_at    TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (sense_id, l1)
+);
+
 CREATE TABLE IF NOT EXISTS sense_examples (
     sense_id  INTEGER NOT NULL,
     seq       INTEGER NOT NULL,
@@ -75,6 +92,62 @@ CREATE TABLE IF NOT EXISTS item_level (
     cefr       TEXT,
     freq_rank  INTEGER,
     source     TEXT NOT NULL
+);
+
+-- Ingilizce kullanim notu — KARTIN PARCASI DEGIL, kendi satiri (Is 3).
+-- `note` BOS OLABILIR ve bu bir RED DEGILDIR: sebep yoksa status='approved'
+-- ve note=''. Tek yazicisi `note/store.py::LexiconNoteStore`dur.
+CREATE TABLE IF NOT EXISTS sense_usage_note (
+    sense_id      INTEGER PRIMARY KEY,
+    note          TEXT    NOT NULL DEFAULT '',
+    reason        TEXT,
+    status        TEXT    NOT NULL,
+    reject_reason TEXT,
+    tier          INTEGER NOT NULL,
+    source        TEXT    NOT NULL,
+    model         TEXT,
+    prompt_hash   TEXT,
+    updated_at    TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Anlamin L1 CEVIRISI: tanim + kullanim notu, TEK paket, TEK status (Is 3).
+-- `sense_gloss_l1`in aksine bu tablo `status` sutununu KENDI tasir — kardes
+-- durum tablosu gerekmez. Tek yazicisi `translate/store.py`.
+CREATE TABLE IF NOT EXISTS sense_translation (
+    sense_id      INTEGER NOT NULL,
+    l1            TEXT    NOT NULL,
+    definition    TEXT,
+    usage_note    TEXT,
+    status        TEXT    NOT NULL,
+    reject_reason TEXT,
+    tier          INTEGER NOT NULL,
+    source        TEXT    NOT NULL,
+    model         TEXT,
+    prompt_hash   TEXT,
+    updated_at    TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (sense_id, l1)
+);
+
+-- `sense_translation`in ceviri ornek cumleleri — dil basina ayri satirlar.
+CREATE TABLE IF NOT EXISTS sense_translation_examples (
+    sense_id  INTEGER NOT NULL,
+    l1        TEXT    NOT NULL,
+    seq       INTEGER NOT NULL,
+    text      TEXT    NOT NULL,
+    tier      INTEGER NOT NULL,
+    source    TEXT    NOT NULL,
+    PRIMARY KEY (sense_id, l1, seq)
+);
+
+-- `gloss_l1`in kisa notu (temiz karsilik yoksa). Tek yazicisi `translate/store.py`.
+CREATE TABLE IF NOT EXISTS sense_gloss_l1_note (
+    sense_id  INTEGER NOT NULL,
+    l1        TEXT    NOT NULL,
+    note      TEXT    NOT NULL,
+    tier      INTEGER NOT NULL,
+    source    TEXT    NOT NULL,
+    model     TEXT,
+    PRIMARY KEY (sense_id, l1)
 );
 """
 

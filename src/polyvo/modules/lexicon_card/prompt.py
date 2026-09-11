@@ -1,9 +1,15 @@
 """
 Prompt metni — modelden ISTENEN sey burada, TEK yerde tanimlidir.
 
-Iki kural bilincli: (1) sozluk tohumu prompt'a "dogru cevap" olarak degil
-BAGLAM olarak girer — model kopyalamak zorunda degildir; (2) L1 bicim
-kurallari `core/lang/`den gelir, buraya dil gomulmez.
+Kart DILE BAGLI DEGILDIR: yalnizca Ingilizce uretilir, ana dil karsiligi
+ayri bir kosunun isidir (`translate/prompt.py`).
+
+`usage_note` BURADA ISTENMEZ (Is 3): olcum 957 kartin 4'unde doluydu, sebep
+"isteqe bagli" diye gecip kural yazilmamasiydi. Not artik kendi kosusunun
+isi (`note/prompt.py`) — kosullu, sayilabilir bir sebebe baglanir.
+
+Bilincli kural: sozluk tohumu prompt'a "dogru cevap" olarak degil BAGLAM
+olarak girer — model kopyalamak zorunda degildir.
 
 `retry_note` bir onceki denemenin RED SEBEBIDIR: metni degistirdigi icin
 onbellek anahtari da degisir, yani yeniden deneme gercekten yeni cevap alir.
@@ -12,15 +18,12 @@ onbellek anahtari da degisir, yani yeniden deneme gercekten yeni cevap alir.
 from __future__ import annotations
 
 from polyvo.core.jobs.base import Unit
-from polyvo.core.lang import get_rules
 from polyvo.modules.lexicon_card.seed import Seed
 
 #: Modelden beklenen JSON'un ISKELETI — QA tam bu alanlari arar.
 SCHEMA_HINT = """{
   "gloss_en": "<short English definition, one sentence, no example>",
   "register": "<one of: neutral | formal | informal | slang | technical>",
-  "usage_note": "<optional short note, or empty string>",
-  "gloss_l1": "<the single best {l1_name} equivalent>",
   "examples": ["<natural sentence using the word>", "<a second, different one>"]
 }"""
 
@@ -43,10 +46,8 @@ def _context_block(seed: Seed) -> str | None:
     return "\n".join(lines)
 
 
-def build(unit: Unit, l1: str, retry_note: str | None = None) -> str:
+def build(unit: Unit, retry_note: str | None = None) -> str:
     """Bir birimin prompt metnini kurar."""
-    rules = get_rules(l1)
-    l1_name = rules.LANGUAGE_NAME or l1
     seed: Seed = unit.data.get("seed") or Seed()
     headword = unit.data["headword"]
     pos = unit.data["pos"]
@@ -64,15 +65,9 @@ def build(unit: Unit, l1: str, retry_note: str | None = None) -> str:
         "NOT contain the word itself.",
         f"- examples: exactly {EXAMPLE_COUNT} natural sentences; each MUST "
         f'contain "{headword}" (an inflected form is fine).',
-        f"- gloss_l1: the {l1_name} equivalent, nothing else — no explanation, "
-        "no alternatives separated by slashes.",
-    ]
-    if rules.PROMPT_RULES:
-        parts.append(rules.PROMPT_RULES)
-    parts += [
         "",
         "Answer with JSON ONLY, no prose and no markdown fence:",
-        SCHEMA_HINT.replace("{l1_name}", l1_name),
+        SCHEMA_HINT,
     ]
     if retry_note:
         parts += ["",

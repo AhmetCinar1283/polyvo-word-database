@@ -24,6 +24,7 @@ LANGUAGE_NAMES: dict[str, str] = {
     "fr": "French", "it": "Italian", "ru": "Russian", "pt": "Portuguese",
     "nl": "Dutch", "pl": "Polish", "ja": "Japanese", "ko": "Korean",
     "zh": "Chinese", "ar": "Arabic", "el": "Greek", "sv": "Swedish",
+    "pt-BR": "Brazilian Portuguese",
 }
 
 

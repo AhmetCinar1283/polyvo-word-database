@@ -35,6 +35,15 @@ REVIEW_RULES = (
 )
 
 
+# OLCULDU (2026-09-06, `job_attempts` gunlugu): `looks_conjugated` kapisi 35
+# denemede calisti ve neredeyse hepsi YANLIS ALARMDI — "kutu", "kedi", "kotu",
+# "garanti", "kahvalti", "kendi", "esinti" gibi SIRADAN isimler `-di/-ti/-tu/
+# -tu/-ti` ile biter. Morfoloji cozumleyicisi olmadan bu ayrim yapilamaz,
+# yani kontrol GARANTI EDILEMEZ -> reddetmez, uyarir (§6.7). Fiil mastari
+# kapisi (`verb_missing_infinitive`) olculdu ve dogru calisiyor, o REDDEDER.
+SOFT_FORM_CODES = frozenset({"looks_conjugated"})
+
+
 def check_form(part_of_speech: str, text: str) -> str | None:
     """Turkce sozluk bicimi kapisi. Sorun varsa kisa kod, yoksa None.
     Cok kelimeli ifadede SON kelimeye bakilir (Turkce'de bas sondadir)."""
@@ -74,6 +83,12 @@ LANG_MARKERS = _re.compile(
     r"|(?i:\b(bir|ve|bu|şu|için|ile|olarak|daha|çok|ama|gibi|kadar|"
     r"sonra|önce|olan|değil|yok|mi|mı|degil|icin|cok)\b)"
 )
+
+# Ingilizce isaretcisi olup TURKCE'de de gecen kelimeler — Ingilizce KANITI
+# SAYILMAZ. Ustteki notun devami: bunlar LANG_MARKERS'a KONMAZ (Ingilizce
+# metni Turkce sandirirdi), ama Ingilizce kaniti olarak da SAYILMAZ (Turkce
+# metni Ingilizce sandirirlar). Iki liste ayni madalyonun iki yuzu.
+ENGLISH_AMBIGUOUS = frozenset({"at", "an", "on", "in", "her", "not", "it"})
 
 # Terim tutarliligi kapisi SADECE bu bayragi acan dillerde calisir: altindaki
 # karsilastirma "kok BASTA kalir, ekler SONA gelir" varsayar — Turkce'de

@@ -130,6 +130,68 @@ def test_process_sebebi_raporlanabilir():
         assert reason in vd.PROCESS_REASON_LABELS
 
 
+# ── --force ───────────────────────────────────────────────────────────────
+
+@pytest.mark.parametrize("mode", vd.REDO_MODES)
+def test_force_yoksa_esit_model_hala_atlanir(mode):
+    """Bayrak verilmezse davranis AYNEN eskisi gibidir."""
+    assert vd.decide(ex(status="rejected", rank=50), mode=mode,
+                     model_rank=50, force=None) == "skip_outranked"
+
+
+@pytest.mark.parametrize("mode", vd.REDO_MODES)
+def test_force_self_esit_modeli_zorlar(mode):
+    """'self': elimdeki en iyi model bu, yine de dene."""
+    assert vd.decide(ex(status="rejected", rank=50), mode=mode,
+                     model_rank=50, force="self") == "process"
+
+
+@pytest.mark.parametrize("mode", vd.REDO_MODES)
+def test_force_self_daha_zayif_modeli_zorlamaz(mode):
+    """'self' yalnizca AYNI seviye icindir — daha zayif model 'all' ister."""
+    assert vd.decide(ex(status="rejected", rank=50), mode=mode,
+                     model_rank=90, force="self") == "skip_outranked"
+
+
+@pytest.mark.parametrize("mode", vd.REDO_MODES)
+def test_force_all_daha_zayif_modeli_de_zorlar(mode):
+    """'all': daha once DAHA IYI bir model reddetmis olsa bile dene."""
+    assert vd.decide(ex(status="rejected", rank=10), mode=mode,
+                     model_rank=90, force="all") == "process"
+
+
+@pytest.mark.parametrize("force", (None, "self", "all"))
+def test_force_onayli_satiri_etkilemez(force):
+    """Force yalnizca KOTU satirin rank kapisini genisletir — onaylininkine
+    hicbir bayrak dokunmaz."""
+    assert vd.decide(ex(status="approved"), mode="none",
+                     model_rank=90, force=force) == "skip_done"
+
+
+@pytest.mark.parametrize("force", (None, "self", "all"))
+def test_force_insan_kararini_etkilemez(force):
+    assert vd.decide(ex(tier=policy.TIER_HUMAN), mode="bad",
+                     model_rank=90, force=force) == "skip_human"
+
+
+def test_bilinmeyen_force_hata_verir():
+    with pytest.raises(ValueError):
+        vd.decide(None, mode="bad", model_rank=10, force="daha-da-zorla")
+
+
+def test_process_sebebi_force_ile_ayrisir():
+    """Zorlanmis satir raporda AYRI bir sebep gorunur — 'onceki model daha
+    iyi oldugu icin' ile 'kullanici zorladigi icin' karistirilmamali."""
+    row = ex(status="rejected", rank=50)
+    assert vd.process_reason(row, model_rank=10) == "reddedilmis_onarim"
+    assert vd.process_reason(row, model_rank=50, force="self") == \
+        "reddedilmis_zorlanmis"
+    assert vd.process_reason(row, model_rank=90, force="all") == \
+        "reddedilmis_zorlanmis"
+    for reason in ("eksik", "reddedilmis_onarim", "reddedilmis_zorlanmis"):
+        assert reason in vd.PROCESS_REASON_LABELS
+
+
 def test_her_skip_verdiktinin_bir_etiketi_var():
     """Etiketsiz bir verdikt, raporda ham kod adi olarak gorunurdu."""
     uretilenler = set()
