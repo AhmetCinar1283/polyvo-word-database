@@ -1,4 +1,4 @@
-# Veri — hicbiri repoya girmez.
+﻿# Veri — hicbiri repoya girmez.
 # `data/stores/` ve `data/human/` YENIDEN URETILEMEZ (kimlik + insan kararlari):
 # repoya girmedikleri icin yedegi AYRICA alinmali, git degil.
 data/
@@ -8,19 +8,37 @@ venv/
 __pycache__/
 *.py[cod]
 *.egg-info/
-# Paket kurulum ciktilari — YALNIZCA kok dizinde. Basindaki `/` sart:
-# `build/` deseni `src/polyvo/dictionary/build/` paketini de yok sayardi.
 /build/
 /dist/
 
+# Ortam değişkenleri ve gizli anahtarlar
 .env
+.env.*
+!.env.example
+*.pem
+*.key
+*.pfx
+
+# Veritabanı ve geçici dosyalar
+*.db
+*.sqlite
+*.sqlite3
+*.sqlite-wal
+*.sqlite-shm
+*.sqlite-journal
+
+# Test ve kapsama
 .pytest_cache/
 .coverage
 htmlcov/
 
+# IDE ve işletim sistemi
 .vscode/
 .idea/
 Thumbs.db
+desktop.ini
+$RECYCLE.BIN/
+*.log
 
-# Eski repodan kalan sevkiyat. Yeni yeri: data/dist/<tag>/<l2>/
+# Eski repodan kalan sevkiyat
 content/
